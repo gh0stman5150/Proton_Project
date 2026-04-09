@@ -3,18 +3,32 @@ Description=Proton Throughput Healthcheck
 After=proton-wg.service proton-port-forward.service
 Requires=proton-wg.service proton-port-forward.service
 PartOf=proton-wg.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
 EnvironmentFile=-/etc/proton/proton-common.env
 EnvironmentFile=-/etc/proton/proton-healthcheck.env
 ExecStart=/usr/local/bin/proton/proton-healthcheck.sh
-Restart=always
-RestartSec=10
+Restart=on-failure
+RestartSec=15
+UMask=0077
 NoNewPrivileges=yes
 PrivateTmp=yes
+PrivateDevices=yes
 ProtectSystem=full
 ProtectHome=yes
+ProtectControlGroups=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/run/proton
 
 [Install]
 WantedBy=multi-user.target

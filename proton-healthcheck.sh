@@ -4,9 +4,12 @@ set -euo pipefail
 
 LOG_TAG="${LOG_TAG:-proton-healthcheck}"
 STATE_DIR="${STATE_DIR:-/run/proton}"
+STATE_FILE="${STATE_FILE:-${STATE_DIR}/proton-port.state}"
 RECOVERY_LOCK_FILE="${RECOVERY_LOCK_FILE:-${STATE_DIR}/recovery.lock}"
 QBITTORRENT_ENV_FILE="${QBITTORRENT_ENV_FILE:-/etc/proton/qbittorrent.env}"
 QBITTORRENT_URL="${QBITTORRENT_URL:-}"
+QBITTORRENT_SYNC_SCRIPT="${QBITTORRENT_SYNC_SCRIPT:-/usr/local/bin/proton/proton-qbittorrent-sync-safe.sh}"
+PORT_FORWARD_SCRIPT="${PORT_FORWARD_SCRIPT:-/usr/local/bin/proton/proton-port-forward-safe.sh}"
 SERVER_MANAGER_SCRIPT="${SERVER_MANAGER_SCRIPT:-/usr/local/bin/proton/proton-server-manager.sh}"
 
 log() {
@@ -29,7 +32,7 @@ require_command() {
     fi
 }
 
-for cmd in awk curl flock stat systemctl; do
+for cmd in awk curl cut flock grep stat systemctl tr; do
     require_command "$cmd"
 done
 
@@ -108,6 +111,18 @@ combined_speed_bps() {
     '
 }
 
+has_current_port_state() {
+    [[ -f "$STATE_FILE" ]] || return 1
+
+    awk -F= '
+        /^CURRENT_PORT=/ {
+            found = ($2 != "")
+            exit
+        }
+        END { exit found ? 0 : 1 }
+    ' "$STATE_FILE"
+}
+
 with_recovery_lock() {
     local action="$1"
     shift
@@ -121,10 +136,34 @@ with_recovery_lock() {
     ) 201>"$RECOVERY_LOCK_FILE"
 }
 
-perform_recovery() {
+perform_qb_sync_refresh() {
     local speed="$1"
 
-    log "Throughput stayed below threshold at ${speed} B/s; restarting Proton services"
+    if [[ ! -x "$QBITTORRENT_SYNC_SCRIPT" ]]; then
+        log "WARNING: qBittorrent sync script is not executable: $QBITTORRENT_SYNC_SCRIPT"
+        return 1
+    fi
+
+    log "Throughput stayed below threshold at ${speed} B/s; refreshing qBittorrent port and DNAT state"
+    "$QBITTORRENT_SYNC_SCRIPT"
+}
+
+perform_natpmp_refresh() {
+    local speed="$1"
+
+    if [[ ! -x "$PORT_FORWARD_SCRIPT" ]]; then
+        log "WARNING: Port-forward script is not executable: $PORT_FORWARD_SCRIPT"
+        return 1
+    fi
+
+    log "Throughput stayed below threshold at ${speed} B/s; forcing a one-shot NAT-PMP refresh"
+    "$PORT_FORWARD_SCRIPT" once
+}
+
+perform_full_recovery() {
+    local speed="$1"
+
+    log "Throughput stayed below threshold at ${speed} B/s after staged recovery; restarting Proton services"
 
     if [[ -x "$SERVER_MANAGER_SCRIPT" ]]; then
         "$SERVER_MANAGER_SCRIPT" mark-bad "" "low-throughput-${speed}" >/dev/null 2>&1 || true
@@ -135,20 +174,66 @@ perform_recovery() {
 
 recover() {
     local speed="$1"
+    local action_name=""
+    local action_func=""
+    local next_stage=0
+    local rc
 
-    if with_recovery_lock "healthcheck recovery" perform_recovery "$speed"; then
+    while true; do
+        case "$RECOVERY_STAGE" in
+            0)
+                if has_current_port_state; then
+                    action_name="qB sync refresh"
+                    action_func="perform_qb_sync_refresh"
+                    next_stage=1
+                    break
+                fi
+
+                log "Skipping qB sync refresh because no forwarded port is recorded; escalating to NAT-PMP refresh"
+                RECOVERY_STAGE=1
+                ;;
+            1)
+                action_name="NAT-PMP refresh"
+                action_func="perform_natpmp_refresh"
+                next_stage=2
+                break
+                ;;
+            *)
+                action_name="healthcheck recovery"
+                action_func="perform_full_recovery"
+                next_stage=0
+                break
+                ;;
+        esac
+    done
+
+    if with_recovery_lock "$action_name" "$action_func" "$speed"; then
+        RECOVERY_STAGE="$next_stage"
         return 0
     fi
 
-    local rc=$?
+    rc=$?
     if [[ "$rc" -eq 99 ]]; then
         return 0
     fi
 
-    return "$rc"
+    log "Recovery action '$action_name' failed with exit $rc"
+    RECOVERY_STAGE="$next_stage"
+    return 0
+}
+
+reset_recovery_state() {
+    local reason="${1:-}"
+
+    LOW_SPEED_COUNT=0
+    if (( RECOVERY_STAGE != 0 )) && [[ -n "$reason" ]]; then
+        log "$reason"
+    fi
+    RECOVERY_STAGE=0
 }
 
 LOW_SPEED_COUNT=0
+RECOVERY_STAGE=0
 
 log "Starting throughput healthcheck loop..."
 
@@ -156,14 +241,14 @@ while true; do
     COOKIE="$(login_cookie)"
 
     if [[ -z "$COOKIE" ]]; then
-        LOW_SPEED_COUNT=0
+        reset_recovery_state
         log "qBittorrent login failed during healthcheck; retrying later"
         sleep "$CHECK_INTERVAL"
         continue
     fi
 
     if ! has_active_transfers "$COOKIE"; then
-        LOW_SPEED_COUNT=0
+        reset_recovery_state
         sleep "$CHECK_INTERVAL"
         continue
     fi
@@ -171,21 +256,21 @@ while true; do
     SPEED_BPS="$(combined_speed_bps "$COOKIE")"
 
     if [[ -z "$SPEED_BPS" ]]; then
-        LOW_SPEED_COUNT=0
+        reset_recovery_state
         sleep "$CHECK_INTERVAL"
         continue
     fi
 
     if (( SPEED_BPS < MIN_COMBINED_SPEED_BPS )); then
         ((LOW_SPEED_COUNT++))
-        log "Low throughput detected (${SPEED_BPS} B/s, ${LOW_SPEED_COUNT}/${MAX_LOW_SPEED_CHECKS})"
+        log "Low throughput detected (${SPEED_BPS} B/s, ${LOW_SPEED_COUNT}/${MAX_LOW_SPEED_CHECKS}, stage ${RECOVERY_STAGE})"
 
         if (( LOW_SPEED_COUNT >= MAX_LOW_SPEED_CHECKS )); then
             recover "$SPEED_BPS"
             LOW_SPEED_COUNT=0
         fi
     else
-        LOW_SPEED_COUNT=0
+        reset_recovery_state "Throughput recovered; resetting staged recovery ladder"
     fi
 
     sleep "$CHECK_INTERVAL"

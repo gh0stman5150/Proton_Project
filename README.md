@@ -23,6 +23,8 @@ The kill-switch dispatcher defaults to `KILLSWITCH_BACKEND=auto`, which prefers 
 
 The iptables backend intentionally manages dedicated `INPUT` and `OUTPUT` chains only. It leaves Docker-managed `FORWARD` and `nat` chains alone so container networking is not wiped during startup.
 
+The active systemd units also use `Restart=on-failure`, start-rate limits, `UMask=0077`, and conservative service sandboxing so transient failures do not spin forever and the long-running helpers keep a smaller filesystem and address-family footprint.
+
 ## Required qBittorrent Env File
 
 The installer copies [proton-qbittorrent.env](/usr/local/bin/proton/proton-qbittorrent.env) to `/etc/proton/qbittorrent.env` and keeps it root-owned with mode `600`.
@@ -137,7 +139,7 @@ The units default to:
 - `WG_PROFILE=proton`
 - `VPN_INTERFACE=proton`
 - `NATPMP_GATEWAY=10.2.0.1`
-- `MANAGEMENT_ALLOWED_CIDRS=192.168.237.0/24,203.0.113.4/32`
+- `MANAGEMENT_ALLOWED_CIDRS=192.168.237.0/24,24.225.97.122/32`
 - `MANAGE_RESOLVED_DNS=auto`
 - `RESOLVED_DNS_ROUTE_DOMAIN=~.`
 
@@ -156,7 +158,7 @@ If qBittorrent runs in a bridged Docker network and you also want container egre
 
 ## Healthcheck
 
-`proton-healthcheck.service` watches qBittorrent only when there are active transfers. If combined download and upload throughput stays below the configured threshold for multiple checks, it marks the current server bad and restarts the Proton services. The healthcheck and port-forward loop share `RECOVERY_LOCK_FILE` so they do not trigger overlapping reconnect storms.
+`proton-healthcheck.service` watches qBittorrent only when there are active transfers. If combined download and upload throughput stays below the configured threshold for multiple checks, it now uses a staged recovery ladder: qBittorrent port/DNAT refresh, then a one-shot NAT-PMP refresh, and only then a bad-server mark plus Proton service restart. The healthcheck and port-forward loop share `RECOVERY_LOCK_FILE` so they do not trigger overlapping reconnect storms.
 
 Default thresholds:
 

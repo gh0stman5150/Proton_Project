@@ -3,16 +3,33 @@ Description=Proton WireGuard VPN
 After=network-online.target proton-killswitch.service
 Wants=network-online.target
 Requires=proton-killswitch.service
- 
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
 [Service]
 Type=oneshot
 EnvironmentFile=-/etc/proton/proton-common.env
 ExecStart=/usr/local/bin/proton/proton-wg-up-safe.sh
 ExecStop=/usr/local/bin/proton/proton-wg-down-safe.sh
 RemainAfterExit=yes
+TimeoutStartSec=120
+TimeoutStopSec=60
+UMask=0077
 NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
 ProtectHome=yes
- 
+ProtectControlGroups=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+ReadWritePaths=/run/proton /etc/wireguard/proton-runtime
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+
 [Install]
 WantedBy=multi-user.target
- 

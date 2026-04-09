@@ -2,6 +2,7 @@
 
 set -euo pipefail
 
+ACTION="${1:-loop}"
 WG_PROFILE="${WG_PROFILE:-proton}"
 VPN_INTERFACE="${VPN_INTERFACE:-$WG_PROFILE}"
 NATPMP_GATEWAY="${NATPMP_GATEWAY:-10.2.0.1}"
@@ -117,6 +118,41 @@ clear_state() {
     rm -f "$STATE_FILE"
 }
 
+sync_port_once() {
+    local ip current_port out port
+
+    load_selected_server
+    ip="$(get_ip)"
+
+    if [[ -z "$ip" ]]; then
+        log "No VPN IP available for one-shot port refresh"
+        return 1
+    fi
+
+    current_port="$(load_state_port)"
+
+    if [[ -n "$current_port" ]]; then
+        log "Refreshing port $current_port (one-shot)..."
+        out="$(refresh_port "$current_port" || true)"
+    else
+        log "Requesting new port (one-shot)..."
+        out="$(request_port || true)"
+    fi
+
+    port="$(echo "$out" | extract_port)"
+
+    if [[ -z "$port" ]]; then
+        log "One-shot port refresh failed"
+        clear_state
+        return 1
+    fi
+
+    log "One-shot port refresh applied: $port"
+    save_state "$port" "$ip"
+    "$QBITTORRENT_SYNC_SCRIPT" || true
+    return 0
+}
+
 with_recovery_lock() {
     local action="$1"
     shift
@@ -156,59 +192,77 @@ reconnect() {
     return "$rc"
 }
 
-log "Starting WireGuard port forward loop..."
+run_loop() {
+    local last_ip current_port failures ip out port
 
-LAST_IP="$(load_state_ip)"
-CURRENT_PORT="$(load_state_port)"
-FAILURES=0
+    log "Starting WireGuard port forward loop..."
 
-load_selected_server
+    last_ip="$(load_state_ip)"
+    current_port="$(load_state_port)"
+    failures=0
 
-while true; do
-    IP="$(get_ip)"
+    load_selected_server
 
-    if [[ -z "$IP" ]]; then
-        log "No VPN IP, reconnecting..."
-        reconnect
-        sleep "$CHECK_INTERVAL"
-        continue
-    fi
+    while true; do
+        ip="$(get_ip)"
 
-    if [[ "$IP" != "$LAST_IP" ]]; then
-        log "VPN IP changed: ${LAST_IP:-unknown} -> $IP"
-        LAST_IP="$IP"
-        CURRENT_PORT=""
-        FAILURES=0
-    fi
-
-    if [[ -n "$CURRENT_PORT" ]]; then
-        log "Refreshing port $CURRENT_PORT..."
-        OUT="$(refresh_port "$CURRENT_PORT" || true)"
-    else
-        log "Requesting new port..."
-        OUT="$(request_port || true)"
-    fi
-
-    PORT="$(echo "$OUT" | extract_port)"
-
-    if [[ -n "$PORT" ]]; then
-        log "Got port: $PORT"
-        CURRENT_PORT="$PORT"
-        save_state "$PORT" "$IP"
-        "$QBITTORRENT_SYNC_SCRIPT" || true
-        FAILURES=0
-    else
-        ((FAILURES++))
-        log "Port request failed ($FAILURES/$MAX_FAILURES)"
-        CURRENT_PORT=""
-
-        if (( FAILURES >= MAX_FAILURES )); then
-            log "Too many failures -> reconnecting tunnel"
+        if [[ -z "$ip" ]]; then
+            log "No VPN IP, reconnecting..."
             reconnect
-            FAILURES=0
-            LAST_IP=""
+            sleep "$CHECK_INTERVAL"
+            continue
         fi
-    fi
 
-    sleep "$CHECK_INTERVAL"
-done
+        if [[ "$ip" != "$last_ip" ]]; then
+            log "VPN IP changed: ${last_ip:-unknown} -> $ip"
+            last_ip="$ip"
+            current_port=""
+            failures=0
+        fi
+
+        if [[ -n "$current_port" ]]; then
+            log "Refreshing port $current_port..."
+            out="$(refresh_port "$current_port" || true)"
+        else
+            log "Requesting new port..."
+            out="$(request_port || true)"
+        fi
+
+        port="$(echo "$out" | extract_port)"
+
+        if [[ -n "$port" ]]; then
+            log "Got port: $port"
+            current_port="$port"
+            save_state "$port" "$ip"
+            "$QBITTORRENT_SYNC_SCRIPT" || true
+            failures=0
+        else
+            ((failures++))
+            log "Port request failed ($failures/$MAX_FAILURES)"
+            current_port=""
+
+            if (( failures >= MAX_FAILURES )); then
+                log "Too many failures -> reconnecting tunnel"
+                reconnect
+                failures=0
+                last_ip=""
+            fi
+        fi
+
+        sleep "$CHECK_INTERVAL"
+    done
+}
+
+case "$ACTION" in
+    loop)
+        run_loop
+        ;;
+    once)
+        log "Starting one-shot WireGuard port refresh..."
+        sync_port_once
+        ;;
+    *)
+        echo "Usage: $0 [loop|once]" >&2
+        exit 1
+        ;;
+esac

@@ -4,7 +4,9 @@ After=proton-wg.service docker.service
 Requires=proton-wg.service
 PartOf=proton-wg.service
 Wants=proton-healthcheck.service docker.service
- 
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
 [Service]
 Type=simple
 EnvironmentFile=-/etc/proton/proton-common.env
@@ -12,14 +14,27 @@ EnvironmentFile=-/etc/proton/proton-port-forward.env
 ExecStartPre=/usr/local/bin/proton/proton-port-forward-healthcheck.sh
 ExecStart=/usr/local/bin/proton/proton-port-forward-safe.sh
 ExecStop=/usr/local/bin/proton/proton-qbt-dnat-cleanup.sh
-Restart=always
-RestartSec=5
+Restart=on-failure
+RestartSec=10
 TimeoutStartSec=90
 TimeoutStopSec=30
+UMask=0077
 NoNewPrivileges=yes
 PrivateTmp=yes
+PrivateDevices=yes
 ProtectSystem=full
 ProtectHome=yes
- 
+ProtectControlGroups=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+ReadWritePaths=/run/proton
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+
 [Install]
 WantedBy=multi-user.target
