@@ -1,0 +1,28 @@
+[Unit]
+Description=ProtonVPN NAT-PMP Port Forwarding v2
+After=network-online.target docker.service protonvpn-connect.service
+Wants=network-online.target docker.service
+Requires=protonvpn-connect.service
+PartOf=protonvpn-connect.service
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/protonvpn-port-forward
+RuntimeDirectory=protonvpn
+RuntimeDirectoryMode=0700
+ExecStartPre=/usr/local/bin/protonvpn-port-forward-healthcheck.sh
+ExecStart=/usr/local/bin/protonvpn-port-forward.sh
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=45s
+TimeoutStopSec=30s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+ReadWritePaths=/opt/qbittorrent /run/protonvpn
+
+[Install]
+WantedBy=multi-user.target

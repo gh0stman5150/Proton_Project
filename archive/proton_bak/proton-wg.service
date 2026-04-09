@@ -1,0 +1,13 @@
+[Unit]
+Description=Proton WireGuard VPN
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/proton/proton-wg-up.sh
+ExecStop=/usr/local/bin/proton/proton-wg-down.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

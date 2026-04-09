@@ -1,0 +1,15 @@
+[Unit]
+Description=ProtonVPN NAT-PMP Port Forwarding v2
+After=network-online.target docker.service
+Wants=network-online.target docker.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/protonvpn-port-forward.sh
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

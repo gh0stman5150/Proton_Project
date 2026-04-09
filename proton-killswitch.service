@@ -1,0 +1,18 @@
+[Unit]
+Description=Proton Kill Switch
+After=network-online.target docker.service
+Wants=network-online.target
+Before=proton-wg.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/proton/proton-common.env
+ExecStart=/usr/local/bin/proton/proton-killswitch-dispatch.sh
+RemainAfterExit=yes
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

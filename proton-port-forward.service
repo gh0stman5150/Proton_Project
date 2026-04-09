@@ -1,0 +1,24 @@
+[Unit]
+Description=Proton Port Forwarding
+After=proton-wg.service docker.service
+Requires=proton-wg.service
+PartOf=proton-wg.service
+Wants=proton-healthcheck.service docker.service
+ 
+[Service]
+Type=simple
+EnvironmentFile=-/etc/proton/proton-common.env
+EnvironmentFile=-/etc/proton/proton-port-forward.env
+ExecStartPre=/usr/local/bin/proton/proton-port-forward-healthcheck.sh
+ExecStart=/usr/local/bin/proton/proton-port-forward-safe.sh
+Restart=always
+RestartSec=5
+TimeoutStartSec=90
+TimeoutStopSec=30
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+ 
+[Install]
+WantedBy=multi-user.target
