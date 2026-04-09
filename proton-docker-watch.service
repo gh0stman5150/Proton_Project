@@ -1,0 +1,21 @@
+[Unit]
+Description=Proton Docker Network Watcher
+After=network-online.target docker.service
+Wants=docker.service network-online.target
+
+[Service]
+Type=simple
+# Optional environment files (installer will install proton-qbittorrent.env)
+EnvironmentFile=-/etc/proton/proton-qbittorrent.env
+EnvironmentFile=-/etc/proton/proton-common.env
+ExecStart=/usr/local/bin/proton/proton-docker-network-watcher.sh
+Restart=on-failure
+RestartSec=5
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+ProtectSystem=full
+NoNewPrivileges=true
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

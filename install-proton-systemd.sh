@@ -11,11 +11,15 @@ FORCE_ENV=0
 QBITTORRENT_URL_VALUE=""
 QBITTORRENT_USER_VALUE=""
 QBITTORRENT_PASS_VALUE=""
+QBT_CONTAINER_NAME_VALUE=""
+QBT_INTERNAL_PORT_VALUE=""
+QBT_NETWORK_NAME_VALUE=""
 
 SERVICES=(
     proton-killswitch.service
     proton-wg.service
     proton-port-forward.service
+    proton-docker-watch.service
     proton-healthcheck.service
 )
 
@@ -28,6 +32,8 @@ SCRIPTS=(
     proton-port-forward-healthcheck.sh
     proton-port-forward-safe.sh
     proton-qbittorrent-sync-safe.sh
+    proton-qbt-dnat-cleanup.sh
+    proton-docker-network-watcher.sh
     proton-server-manager.sh
     proton-wg-up-safe.sh
     proton-wg-down-safe.sh
@@ -52,6 +58,9 @@ Options:
   --qb-url URL        Set QBITTORRENT_URL in /etc/proton/qbittorrent.env
   --qb-user USER      Set QBITTORRENT_USER in /etc/proton/qbittorrent.env
   --qb-pass PASS      Set QBITTORRENT_PASS in /etc/proton/qbittorrent.env
+    --qb-container NAME Set QBT_CONTAINER_NAME in /etc/proton/qbittorrent.env (default: qbittorrent)
+    --qb-int-port PORT  Set QBT_INTERNAL_PORT in /etc/proton/qbittorrent.env (default: 6881)
+    --qb-network NAME   Set QBT_NETWORK_NAME in /etc/proton/qbittorrent.env (optional)
   --force-env         Overwrite env files in /etc/proton instead of writing *.new
   --help              Show this help text
 EOF
@@ -283,10 +292,16 @@ install_qbittorrent_env() {
     current_url="$(awk -F= '/^QBITTORRENT_URL=/ {print $2; exit}' "${tmp_file}")"
     current_user="$(awk -F= '/^QBITTORRENT_USER=/ {print $2; exit}' "${tmp_file}")"
     current_pass="$(awk -F= '/^QBITTORRENT_PASS=/ {print $2; exit}' "${tmp_file}")"
+    current_container="$(awk -F= '/^QBT_CONTAINER_NAME=/ {print $2; exit}' "${tmp_file}")"
+    current_int_port="$(awk -F= '/^QBT_INTERNAL_PORT=/ {print $2; exit}' "${tmp_file}")"
+    current_network="$(awk -F= '/^QBT_NETWORK_NAME=/ {print $2; exit}' "${tmp_file}")"
 
     current_url="${QBITTORRENT_URL_VALUE:-$current_url}"
     current_user="${QBITTORRENT_USER_VALUE:-$current_user}"
     current_pass="${QBITTORRENT_PASS_VALUE:-$current_pass}"
+    current_container="${QBT_CONTAINER_NAME_VALUE:-${current_container:-qbittorrent}}"
+    current_int_port="${QBT_INTERNAL_PORT_VALUE:-${current_int_port:-6881}}"
+    current_network="${QBT_NETWORK_NAME_VALUE:-${current_network:-}}"
 
     cat > "${tmp_file}" <<EOF
 # qBittorrent credentials for the host-side Proton services.
@@ -296,6 +311,10 @@ install_qbittorrent_env() {
 QBITTORRENT_URL=${current_url}
 QBITTORRENT_USER=${current_user}
 QBITTORRENT_PASS=${current_pass}
+    QBT_CONTAINER_NAME=${current_container}
+    QBT_INTERNAL_PORT=${current_int_port}
+    # Optional: Docker network name where qBittorrent runs (used to lookup container IP). If blank, the first network IP will be used.
+    QBT_NETWORK_NAME=${current_network}
 EOF
 
     install -o root -g root -m 0600 \
@@ -327,6 +346,18 @@ while [[ $# -gt 0 ]]; do
             ;;
         --qb-pass)
             QBITTORRENT_PASS_VALUE="${2:?Missing value for --qb-pass}"
+            shift 2
+            ;;
+        --qb-container)
+            QBT_CONTAINER_NAME_VALUE="${2:?Missing value for --qb-container}"
+            shift 2
+            ;;
+        --qb-int-port)
+            QBT_INTERNAL_PORT_VALUE="${2:?Missing value for --qb-int-port}"
+            shift 2
+            ;;
+        --qb-network)
+            QBT_NETWORK_NAME_VALUE="${2:?Missing value for --qb-network}"
             shift 2
             ;;
         --force-env)

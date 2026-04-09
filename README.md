@@ -35,6 +35,19 @@ QBITTORRENT_USER=change-me
 QBITTORRENT_PASS=change-me
 ```
 
+Additional optional vars (installed by the installer template) when qBittorrent runs on a Docker "starr"/bridge network:
+
+```bash
+# Container name (docker): default qbittorrent
+QBT_CONTAINER_NAME=qbittorrent
+# Internal torrent listen port inside the container (default 6881)
+QBT_INTERNAL_PORT=6881
+# Optional Docker network name to lookup container IP (default: first network IP)
+QBT_NETWORK_NAME=starr
+```
+
+If these are present the host-side sync script will add an nft DNAT rule that maps the Proton public forwarded port -> the qBittorrent container internal port. This preserves the container on the `starr` network (no recreate) while keeping inbound forwarding functional.
+
 Because the Proton services run on the host, `QBITTORRENT_URL` should point at the host-published qBittorrent Web UI port. Docker network names such as `starr_network` are not directly reachable from these host systemd services unless you separately proxy or publish them.
 
 The hardened path expects:
@@ -64,6 +77,15 @@ sudo ./install-proton-systemd.sh \
   --qb-url http://127.0.0.1:8081 \
   --qb-user your-user \
   --qb-pass your-pass
+```
+
+You may also set Docker-related values at install time:
+
+```bash
+sudo ./install-proton-systemd.sh \
+  --qb-container qbittorrent \
+  --qb-int-port 6881 \
+  --qb-network starr
 ```
 
 ## Runtime State
@@ -130,3 +152,72 @@ Default thresholds:
 - `MAX_LOW_SPEED_CHECKS=3`
 
 Tune those values in [proton-healthcheck.service](/usr/local/bin/proton/proton-healthcheck.service) if your workload is bursty or often idle between peer activity.
+
+## Quick verification
+
+After install/restart, verify the key pieces are present:
+
+- WireGuard + routes:
+
+```bash
+wg show
+ip rule show
+ip route show table 51820
+```
+
+- nft kill-switch and DNAT (if enabled):
+
+```bash
+sudo nft list table inet proton
+sudo nft list table ip proton_nat     # shows DNAT rule with comment qbt-dnat
+```
+
+- qBittorrent mapping and state:
+
+```bash
+cat /run/proton/proton-port.state
+docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' $QBT_CONTAINER_NAME
+sudo nft list chain ip proton_nat prerouting -a | grep qbt-dnat
+```
+
+Simulate VPN down/up in a safe environment to confirm the kill-switch blocks leaks (and SSH/RDP still reachable):
+
+```bash
+sudo ip link set dev $VPN_INTERFACE down
+# test outbound connectivity (should be blocked for app traffic)
+# bring back up
+sudo ip link set dev $VPN_INTERFACE up
+```
+
+## Optional: Docker network watcher
+
+If you run qBittorrent on a bridged Docker network and also want the host-side routing and DNAT to stay in sync with Docker network/container changes, enable the optional watcher service. It listens for Docker network/container events and will:
+
+- Re-apply the `ip rule from <DOCKER_NETWORK_CIDR>` -> VPN table rule when the Docker network subnet changes.
+- Refresh the qBittorrent DNAT mapping (public port -> container IP:internal_port) by invoking the existing sync script.
+
+Install and start the watcher using the installer (it is included in the bundle) or manually:
+
+```bash
+# (installer) re-run the installer to copy new files and reload units
+sudo ./install-proton-systemd.sh
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now proton-docker-watch.service
+sudo journalctl -fu proton-docker-watch.service
+```
+
+Verify the watcher has applied routing and DNAT as expected:
+
+```bash
+ip rule show | grep 51820
+ip route show table 51820
+sudo nft list chain ip proton_nat prerouting -a | grep qbt-dnat
+```
+
+To disable the watcher:
+
+```bash
+sudo systemctl disable --now proton-docker-watch.service
+```
+

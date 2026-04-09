@@ -11,6 +11,7 @@ EnvironmentFile=-/etc/proton/proton-common.env
 EnvironmentFile=-/etc/proton/proton-port-forward.env
 ExecStartPre=/usr/local/bin/proton/proton-port-forward-healthcheck.sh
 ExecStart=/usr/local/bin/proton/proton-port-forward-safe.sh
+ExecStop=/usr/local/bin/proton/proton-qbt-dnat-cleanup.sh
 Restart=always
 RestartSec=5
 TimeoutStartSec=90

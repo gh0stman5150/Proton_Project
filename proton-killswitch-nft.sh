@@ -19,6 +19,7 @@ SERVER_RESELECT_FILE="${SERVER_RESELECT_FILE:-${STATE_DIR}/reselect-server.flag}
 SERVER_POOL_ENABLED="${SERVER_POOL_ENABLED:-auto}"
 SERVER_MANAGER_SCRIPT="${SERVER_MANAGER_SCRIPT:-/usr/local/bin/proton/proton-server-manager.sh}"
 WG_POOL_DIR="${WG_POOL_DIR:-/etc/wireguard/proton-pool}"
+DOCKER_NETWORK_CIDR="${DOCKER_NETWORK_CIDR:-}"
 
 log() {
     echo "$(date '+%F %T') | $*" | systemd-cat -t proton-killswitch
@@ -163,6 +164,19 @@ management_input_rules() {
     IFS="$old_ifs"
 }
 
+prerouting_mark_rules() {
+    local old_ifs part trimmed
+
+    old_ifs="$IFS"
+    IFS=','
+    for part in $DOCKER_NETWORK_CIDR; do
+        trimmed="$(trim_field "$part")"
+        [[ -n "$trimmed" ]] || continue
+        printf '        ip saddr %s meta mark set %s\n' "$trimmed" "$VPN_FWMARK"
+    done
+    IFS="$old_ifs"
+}
+
 get_endpoint_value() {
     awk -F '=' '/^[[:space:]]*Endpoint[[:space:]]*=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit}' "$WG_CONFIG"
 }
@@ -216,6 +230,10 @@ nft delete table inet proton 2>/dev/null || true
 
 nft -f - <<EOF
 table inet proton {
+    chain prerouting_mangle {
+        type filter hook prerouting priority -150; policy accept;
+$(prerouting_mark_rules)
+    }
     chain output_mangle {
         type route hook output priority -150; policy accept;
         ip daddr $LAN_CIDR return
@@ -244,6 +262,15 @@ $(management_input_rules)
         oifname "$LAN_IF" udp sport 68 udp dport 67 accept
         oifname "$LAN_IF" ip daddr $ENDPOINT_IP udp dport $ENDPOINT_PORT accept
         oifname "$VPN_IF" accept
+        counter drop
+    }
+    chain forward {
+        type filter hook forward priority 0; policy accept;
+        ct state established,related accept
+        # Allow forwarding that goes out the vpn interface
+        oifname "$VPN_IF" accept
+        # Allow LAN <-> LAN forwarding
+        iifname "$LAN_IF" oifname "$LAN_IF" accept
         counter drop
     }
 }

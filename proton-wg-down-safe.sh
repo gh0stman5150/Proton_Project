@@ -9,6 +9,7 @@ WG_CONFIG="${WG_CONFIG:-/etc/wireguard/${WG_PROFILE}.conf}"
 FILTERED_CONFIG_PATH="${WG_RUNTIME_DIR}/${WG_PROFILE}.conf"
 VPN_FWMARK="${VPN_FWMARK:-0xca6c}"
 VPN_TABLE="${VPN_TABLE:-51820}"
+DOCKER_NETWORK_CIDR="${DOCKER_NETWORK_CIDR:-}"
 
 if ! command -v wg-quick >/dev/null 2>&1; then
     echo "ERROR: Required command 'wg-quick' is not installed." >&2
@@ -27,6 +28,9 @@ fi
 # does not briefly try to route fwmark'd packets through a gone interface.
 ip rule del fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100 2>/dev/null || true
 ip route flush table "$VPN_TABLE" 2>/dev/null || true
+if [[ -n "$DOCKER_NETWORK_CIDR" ]]; then
+    ip rule del from "$DOCKER_NETWORK_CIDR" lookup "$VPN_TABLE" priority 110 2>/dev/null || true
+fi
 
 if [[ -f "$FILTERED_CONFIG_PATH" ]]; then
     wg-quick down "$FILTERED_CONFIG_PATH" || true

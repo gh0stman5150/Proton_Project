@@ -24,7 +24,7 @@ require_command() {
     fi
 }
 
-for cmd in awk cat chmod curl cut grep mkdir stat systemd-cat tr; do
+for cmd in awk cat chmod curl cut grep mkdir stat systemd-cat tr docker nft; do
     require_command "$cmd"
 done
 
@@ -94,3 +94,72 @@ umask 077
 echo "$PORT" > "$CACHE_FILE"
 
 log "qBittorrent updated successfully"
+
+# --- DNAT: map public port -> qB container internal port (starr network) ---
+QBT_CONTAINER_NAME="${QBT_CONTAINER_NAME:-qbittorrent}"
+QBT_INTERNAL_PORT="${QBT_INTERNAL_PORT:-6881}"
+NFT_TABLE="proton_nat"
+NFT_CHAIN="prerouting"
+
+ensure_nft_nat() {
+    nft list table ip "$NFT_TABLE" >/dev/null 2>&1 || nft add table ip "$NFT_TABLE"
+    nft list chain ip "$NFT_TABLE" "$NFT_CHAIN" >/dev/null 2>&1 || \
+        nft add chain ip "$NFT_TABLE" "$NFT_CHAIN" '{ type nat hook prerouting priority 0 ; }'
+}
+
+container_ip_for() {
+    local name="$1"
+    local network="${QBT_NETWORK_NAME:-}"
+
+    if [[ -n "$network" ]]; then
+        # network-specific IP
+        docker inspect -f "{{.NetworkSettings.Networks.$network.IPAddress}}" "$name" 2>/dev/null || true
+        return
+    fi
+
+    # fallback: first network IP
+    docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$name" 2>/dev/null || true
+}
+
+remove_existing_qbt_dnat() {
+    # remove any existing rules we added with comment "qbt-dnat"
+    if ! nft list chain ip "$NFT_TABLE" "$NFT_CHAIN" -a >/dev/null 2>&1; then
+        return 0
+    fi
+
+    # find handles for rules with comment qbt-dnat
+    local handles
+    handles=$(nft list chain ip "$NFT_TABLE" "$NFT_CHAIN" -a 2>/dev/null | awk '/qbt-dnat/ {for(i=1;i<=NF;i++) if($i=="handle") print $(i+1)}')
+    if [[ -z "$handles" ]]; then
+        return 0
+    fi
+
+    for h in $handles; do
+        nft delete rule ip "$NFT_TABLE" "$NFT_CHAIN" handle "$h" 2>/dev/null || true
+    done
+}
+
+add_qbt_dnat() {
+    local pub_port="$1"
+    local cip
+    cip=$(container_ip_for "$QBT_CONTAINER_NAME" )
+    if [[ -z "$cip" ]]; then
+        log "WARNING: qBittorrent container '$QBT_CONTAINER_NAME' IP not found; skipping DNAT"
+        return 0
+    fi
+
+    ensure_nft_nat
+    # Remove previous DNAT rules added by this script
+    remove_existing_qbt_dnat
+
+    # Add new rule with a comment so we can identify it later
+    nft add rule ip "$NFT_TABLE" "$NFT_CHAIN" tcp dport "$pub_port" dnat to "$cip":"$QBT_INTERNAL_PORT" comment "qbt-dnat" || \
+        log "ERROR: Failed to add DNAT rule for qBittorrent"
+
+    log "Installed DNAT: public $pub_port -> $cip:$QBT_INTERNAL_PORT"
+}
+
+# Update DNAT unless container mode is host or no container specified
+if [[ -n "$PORT" ]]; then
+    add_qbt_dnat "$PORT"
+fi

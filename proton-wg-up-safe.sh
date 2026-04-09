@@ -224,6 +224,20 @@ fi
 wg-quick up "$WG_CONFIG_TO_USE"
 
 inject_routes() {
+    # Attempt to auto-detect a Docker 'starr' network subnet if DOCKER_NETWORK_CIDR
+    # was not provided and the docker CLI is available. This helps when the
+    # qBittorrent container lives on a starr network and you want container
+    # traffic forced through the VPN.
+    if [[ -z "$DOCKER_NETWORK_CIDR" ]] && command -v docker >/dev/null 2>&1; then
+        candidate=$(docker network ls --format '{{.Name}}' | grep -i starr | head -n1 || true)
+        if [[ -n "$candidate" ]]; then
+            subnet=$(docker network inspect -f '{{range .IPAM.Config}}{{.Subnet}}{{end}}' "$candidate" 2>/dev/null || true)
+            if [[ -n "$subnet" ]]; then
+                DOCKER_NETWORK_CIDR="$subnet"
+                log "Auto-detected Docker network '$candidate' -> $DOCKER_NETWORK_CIDR"
+            fi
+        fi
+    fi
     # Remove any stale routes from a previous interface before installing
     # new ones.  On pool failover the old interface is gone but its routes
     # linger in the main table until explicitly deleted.
@@ -232,23 +246,24 @@ inject_routes() {
     fi
     ip route del "$NATPMP_GATEWAY" 2>/dev/null || true
 
-    # Wire fwmark'd packets to a dedicated routing table so the killswitch
-    # mark actually steers traffic into the tunnel.  wg-quick must have
-    # Table = off in the [Interface] section so it does not install its own
-    # conflicting rules.
-    ip rule add fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100 2>/dev/null || true
-    ip route replace default dev "$VPN_INTERFACE" table "$VPN_TABLE" 2>/dev/null || true
+    # Clean stale rules first (avoid duplicates)
+    ip rule del fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100 2>/dev/null || true
+    ip rule add fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100
+    ip route replace default dev "$VPN_INTERFACE" table "$VPN_TABLE"
     # NATPMP gateway must be reachable inside the tunnel table too.
-    ip route replace "$NATPMP_GATEWAY" dev "$VPN_INTERFACE" table "$VPN_TABLE" 2>/dev/null || true
+    ip route replace "$NATPMP_GATEWAY" dev "$VPN_INTERFACE" table "$VPN_TABLE"
     # Keep the direct host route in the main table for the killswitch
     # endpoint-allow rule and natpmpc to work without fwmark.
     ip route replace "$NATPMP_GATEWAY" dev "$VPN_INTERFACE" 2>/dev/null || true
 
-    # Route Docker bridge network traffic through the VPN so all containers
-    # use the tunnel for outbound internet access.
+    # If Docker network CIDR is provided, use a source-based rule so container-sourced
+    # traffic is forced into the VPN table (more reliable than a simple dev route).
     if [[ -n "$DOCKER_NETWORK_CIDR" ]]; then
-        ip route replace "$DOCKER_NETWORK_CIDR" dev "$VPN_INTERFACE" 2>/dev/null || true
-        log "Docker network $DOCKER_NETWORK_CIDR routed via $VPN_INTERFACE"
+        # remove any previous rule then add a source-rule
+        ip rule del from "$DOCKER_NETWORK_CIDR" lookup "$VPN_TABLE" priority 110 2>/dev/null || true
+        ip rule add from "$DOCKER_NETWORK_CIDR" lookup "$VPN_TABLE" priority 110
+        ip route replace "$DOCKER_NETWORK_CIDR" dev "$VPN_INTERFACE" table "$VPN_TABLE" 2>/dev/null || true
+        log "Docker network $DOCKER_NETWORK_CIDR routed via $VPN_INTERFACE table $VPN_TABLE"
     fi
 
     log "Policy routing: fwmark $VPN_FWMARK -> table $VPN_TABLE via $VPN_INTERFACE"

@@ -11,6 +11,7 @@ WG_POOL_DIR="${WG_POOL_DIR:-/etc/wireguard/proton-pool}"
 BAD_SERVER_COOLDOWN="${BAD_SERVER_COOLDOWN:-900}"
 PING_TIMEOUT_SECONDS="${PING_TIMEOUT_SECONDS:-1}"
 PING_COUNT="${PING_COUNT:-1}"
+LOCK_FILE="${LOCK_FILE:-${STATE_DIR}/server-manager.lock}"
 
 log() {
     echo "$(date '+%F %T') | $*" | systemd-cat -t "$LOG_TAG"
@@ -139,6 +140,9 @@ save_selection() {
     local endpoint_port="$5"
     local latency_ms="$6"
 
+    local tmp_file
+    tmp_file="${SERVER_SELECTION_FILE}.tmp"
+
     umask 077
     {
         echo "SELECTED_WG_PROFILE=$profile"
@@ -149,7 +153,10 @@ save_selection() {
         echo "SELECTED_ENDPOINT_PORT=$endpoint_port"
         echo "SELECTED_LATENCY_MS=$latency_ms"
         echo "SELECTED_AT=$(date +%s)"
-    } > "$SERVER_SELECTION_FILE"
+    } > "$tmp_file"
+
+    chmod 600 "$tmp_file"
+    mv -f "$tmp_file" "$SERVER_SELECTION_FILE"
 }
 
 select_best_server() {
@@ -272,6 +279,9 @@ reset_bad_servers() {
 
 case "${1:-select}" in
     select)
+        # Acquire lock to prevent concurrent selection/writes
+        exec 200>"$LOCK_FILE"
+        flock 200
         select_best_server "${2:-0}"
         ;;
     current)
@@ -282,12 +292,18 @@ case "${1:-select}" in
         fi
         ;;
     mark-bad)
+        # Acquire lock for marking bad servers (modifies state)
+        exec 200>"$LOCK_FILE"
+        flock 200
         mark_server_bad "${2:-}" "${3:-manual}"
         ;;
     show-bad)
         show_bad_servers
         ;;
     reset-bad)
+        # Acquire lock for reset (modifies state)
+        exec 200>"$LOCK_FILE"
+        flock 200
         reset_bad_servers
         ;;
     *)
