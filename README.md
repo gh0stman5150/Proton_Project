@@ -106,6 +106,8 @@ If `/etc/wireguard/proton-pool` contains one or more `*.conf` files, the active 
 
 The selector stores the active choice in `/run/proton/current-server.env` and tracks cooldowns in `/run/proton/bad-servers.tsv`.
 
+By default the selector also lints each candidate before it can be selected. It rejects configs that contain `PreUp`, `PostUp`, `PreDown`, `PostDown`, or `SaveConfig`, and it expects `DNS` to match `WG_EXPECTED_DNS` unless `WG_LINT_ALLOW_MISSING_DNS=on`.
+
 Useful knobs:
 
 - `WG_POOL_DIR=/etc/wireguard/proton-pool`
@@ -113,6 +115,9 @@ Useful knobs:
 - `BAD_SERVER_COOLDOWN=900`
 - `PING_TIMEOUT_SECONDS=1`
 - `PING_COUNT=1`
+- `SERVER_POOL_STRICT_LINT=on`
+- `WG_EXPECTED_DNS=10.2.0.1`
+- `WG_LINT_ALLOW_MISSING_DNS=off`
 
 Manual helpers:
 

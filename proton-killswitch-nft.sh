@@ -6,6 +6,9 @@ VPN_IF="${VPN_IF:-${VPN_INTERFACE:-$WG_PROFILE}}"
 WG_CONFIG="${WG_CONFIG:-/etc/wireguard/${WG_PROFILE}.conf}"
 WG_ENDPOINT_IP="${WG_ENDPOINT_IP:-}"
 VPN_FWMARK="${VPN_FWMARK:-0xca6c}"
+# Convert fwmark to decimal for use in nft (nft may prefer decimal marks).
+# Allow VPN_FWMARK to be provided as hex (0x...) or decimal.
+VPN_FWMARK_DEC=$((VPN_FWMARK))
 BYPASS_TCP_PORTS="${BYPASS_TCP_PORTS:-22,3389}"
 BYPASS_UDP_PORTS="${BYPASS_UDP_PORTS:-3389}"
 LAN_IF="${LAN_IF:-$(ip route | awk '/default/ {print $5; exit}')}"
@@ -101,11 +104,11 @@ trim_field() {
 
 csv_to_nft_set() {
     local csv="$1"
-    local old_ifs part trimmed result=""
+    local part trimmed result=""
 
-    old_ifs="$IFS"
-    IFS=','
-    for part in $csv; do
+    # Split on commas without mutating IFS (avoid side-effects). Using
+    # parameter expansion to replace commas with spaces for safe iteration.
+    for part in ${csv//,/ }; do
         trimmed="$(trim_field "$part")"
         [[ -n "$trimmed" ]] || continue
         if [[ -n "$result" ]]; then
@@ -114,7 +117,6 @@ csv_to_nft_set() {
             result="$trimmed"
         fi
     done
-    IFS="$old_ifs"
 
     printf '%s\n' "$result"
 }
@@ -134,47 +136,51 @@ bypass_output_rules() {
     fi
 }
 
-management_input_rules() {
-    local cidr old_ifs port trimmed port_ifs
+bypass_output_accept_rules() {
+    local tcp_ports udp_ports
 
-    old_ifs="$IFS"
-    IFS=','
-    for cidr in $MANAGEMENT_ALLOWED_CIDRS; do
+    tcp_ports="$(csv_to_nft_set "$BYPASS_TCP_PORTS")"
+    udp_ports="$(csv_to_nft_set "$BYPASS_UDP_PORTS")"
+
+    if [[ -n "$tcp_ports" ]]; then
+        printf '        oifname "%s" tcp dport { %s } accept\n' "$LAN_IF" "$tcp_ports"
+    fi
+
+    if [[ -n "$udp_ports" ]]; then
+        printf '        oifname "%s" udp dport { %s } accept\n' "$LAN_IF" "$udp_ports"
+    fi
+}
+
+management_input_rules() {
+    local cidr port trimmed
+
+    # Iterate over comma-separated CIDRs and ports without mutating IFS.
+    for cidr in ${MANAGEMENT_ALLOWED_CIDRS//,/ }; do
         cidr="$(trim_field "$cidr")"
         [[ -n "$cidr" ]] || continue
 
-        port_ifs="$IFS"
-        IFS=' '
         for port in ${MANAGEMENT_TCP_PORTS//,/ }; do
             trimmed="$(trim_field "$port")"
             [[ -n "$trimmed" ]] || continue
             printf '        iifname "%s" ip saddr %s tcp dport %s accept\n' "$LAN_IF" "$cidr" "$trimmed"
         done
-        IFS="$port_ifs"
 
-        port_ifs="$IFS"
-        IFS=' '
         for port in ${MANAGEMENT_UDP_PORTS//,/ }; do
             trimmed="$(trim_field "$port")"
             [[ -n "$trimmed" ]] || continue
             printf '        iifname "%s" ip saddr %s udp dport %s accept\n' "$LAN_IF" "$cidr" "$trimmed"
         done
-        IFS="$port_ifs"
     done
-    IFS="$old_ifs"
 }
 
 prerouting_mark_rules() {
-    local old_ifs part trimmed
+    local part trimmed
 
-    old_ifs="$IFS"
-    IFS=','
-    for part in $DOCKER_NETWORK_CIDR; do
+    for part in ${DOCKER_NETWORK_CIDR//,/ }; do
         trimmed="$(trim_field "$part")"
         [[ -n "$trimmed" ]] || continue
-        printf '        ip saddr %s meta mark set %s\n' "$trimmed" "$VPN_FWMARK"
+        printf '        ip saddr %s meta mark set %s\n' "$trimmed" "$VPN_FWMARK_DEC"
     done
-    IFS="$old_ifs"
 }
 
 get_endpoint_value() {
@@ -204,7 +210,14 @@ resolve_endpoint_ip() {
         return 0
     fi
 
-    getent ahostsv4 "$host" | awk 'NR == 1 {print $1}'
+    local ip
+    ip=$(getent ahostsv4 "$host" 2>/dev/null | awk 'NR == 1 {print $1}') || ip=""
+    if [[ -n "$ip" && "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        echo "$ip"
+        return 0
+    fi
+
+    return 1
 }
 
 load_selected_server
@@ -236,10 +249,9 @@ $(prerouting_mark_rules)
     }
     chain output_mangle {
         type route hook output priority -150; policy accept;
-        ip daddr $LAN_CIDR return
-        ip daddr $ENDPOINT_IP udp dport $ENDPOINT_PORT return
+        ip daddr ${ENDPOINT_IP} udp dport ${ENDPOINT_PORT} return
 $(bypass_output_rules)
-        meta mark set $VPN_FWMARK
+        meta mark set ${VPN_FWMARK_DEC}
     }
 
     chain input {
@@ -247,9 +259,9 @@ $(bypass_output_rules)
         iifname "lo" accept
         ct state established,related accept
 $(management_input_rules)
-        iifname "$LAN_IF" ip saddr $LAN_CIDR accept
+        iifname "$LAN_IF" ip saddr ${LAN_CIDR} accept
         iifname "$LAN_IF" udp sport 67 udp dport 68 accept
-        iifname "$LAN_IF" ip saddr $ENDPOINT_IP udp sport $ENDPOINT_PORT accept
+        iifname "$LAN_IF" ip saddr ${ENDPOINT_IP} udp sport ${ENDPOINT_PORT} accept
         iifname "$VPN_IF" accept
         counter drop
     }
@@ -258,9 +270,9 @@ $(management_input_rules)
         type filter hook output priority 0; policy accept;
         oifname "lo" accept
         ct state established,related accept
-        oifname "$LAN_IF" ip daddr $LAN_CIDR accept
+$(bypass_output_accept_rules)
         oifname "$LAN_IF" udp sport 68 udp dport 67 accept
-        oifname "$LAN_IF" ip daddr $ENDPOINT_IP udp dport $ENDPOINT_PORT accept
+        oifname "$LAN_IF" ip daddr ${ENDPOINT_IP} udp dport ${ENDPOINT_PORT} accept
         oifname "$VPN_IF" accept
         counter drop
     }

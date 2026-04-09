@@ -160,7 +160,14 @@ resolve_endpoint_ip() {
         return 0
     fi
 
-    getent ahostsv4 "$host" | awk 'NR == 1 {print $1}'
+    local ip
+    ip=$(getent ahostsv4 "$host" 2>/dev/null | awk 'NR == 1 {print $1}') || ip=""
+    if [[ -n "$ip" && "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        echo "$ip"
+        return 0
+    fi
+
+    return 1
 }
 
 load_selected_server
@@ -216,7 +223,6 @@ iptables -A "$INPUT_CHAIN" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 for_each_csv "$MANAGEMENT_ALLOWED_CIDRS" allow_management_tcp_for_cidr
 for_each_csv "$MANAGEMENT_ALLOWED_CIDRS" allow_management_udp_for_cidr
 
-iptables -A "$OUTPUT_CHAIN" -o "$LAN_IF" -d "$LAN_CIDR" -j ACCEPT
 iptables -A "$INPUT_CHAIN" -i "$LAN_IF" -s "$LAN_CIDR" -j ACCEPT
 
 iptables -A "$OUTPUT_CHAIN" -o "$LAN_IF" -p udp --sport 68 --dport 67 -j ACCEPT

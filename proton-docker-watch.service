@@ -5,8 +5,8 @@ Wants=docker.service network-online.target
 
 [Service]
 Type=simple
-# Optional environment files (installer will install proton-qbittorrent.env)
-EnvironmentFile=-/etc/proton/proton-qbittorrent.env
+# Optional environment files (installer will install qbittorrent.env)
+EnvironmentFile=-/etc/proton/qbittorrent.env
 EnvironmentFile=-/etc/proton/proton-common.env
 ExecStart=/usr/local/bin/proton/proton-docker-network-watcher.sh
 Restart=on-failure

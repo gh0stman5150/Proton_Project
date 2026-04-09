@@ -135,20 +135,19 @@ ipv4_only_csv() {
 prepare_wg_config() {
     local source_config="$1"
     local tmp_config=""
+    local keep_ipv6=0
 
     # NOTE: The WireGuard [Interface] section must contain "Table = off" so
     # wg-quick does not install its own fwmark-based routing rules, which
     # conflict with the policy routing this script manages via inject_routes.
 
     if ipv6_enabled; then
-        WG_CONFIG_TO_USE="$source_config"
-        rm -f "$FILTERED_CONFIG_PATH"
-        return 0
+        keep_ipv6=1
     fi
 
     tmp_config="$(mktemp "${WG_RUNTIME_DIR}/${WG_PROFILE}.XXXXXX.conf")"
 
-    awk '
+    awk -v keep_ipv6="$keep_ipv6" '
         function trim(s) {
             sub(/^[[:space:]]+/, "", s)
             sub(/[[:space:]]+$/, "", s)
@@ -170,8 +169,27 @@ prepare_wg_config() {
             return out
         }
 
-        /^[[:space:]]*Address[[:space:]]*=/ {
-            split($0, fields, /=/)
+        function flush_interface_defaults() {
+            if (in_interface && !table_written) {
+                print "Table = off"
+            }
+        }
+
+        /^[[:space:]]*\[/ {
+            flush_interface_defaults()
+            in_interface = ($0 ~ /^[[:space:]]*\[Interface\][[:space:]]*$/)
+            table_written = in_interface ? 0 : 1
+            print
+            next
+        }
+
+        in_interface && /^[[:space:]]*Table[[:space:]]*=/ {
+            print "Table = off"
+            table_written = 1
+            next
+        }
+
+        !keep_ipv6 && /^[[:space:]]*Address[[:space:]]*=/ {
             value = substr($0, index($0, "=") + 1)
             value = filter_ipv4_csv(value)
             if (value != "") {
@@ -180,7 +198,7 @@ prepare_wg_config() {
             next
         }
 
-        /^[[:space:]]*AllowedIPs[[:space:]]*=/ {
+        !keep_ipv6 && /^[[:space:]]*AllowedIPs[[:space:]]*=/ {
             value = substr($0, index($0, "=") + 1)
             value = filter_ipv4_csv(value)
             if (value != "") {
@@ -189,7 +207,7 @@ prepare_wg_config() {
             next
         }
 
-        /^[[:space:]]*DNS[[:space:]]*=/ {
+        !keep_ipv6 && /^[[:space:]]*DNS[[:space:]]*=/ {
             value = substr($0, index($0, "=") + 1)
             value = filter_ipv4_csv(value)
             if (value != "") {
@@ -199,6 +217,10 @@ prepare_wg_config() {
         }
 
         { print }
+
+        END {
+            flush_interface_defaults()
+        }
     ' "$source_config" > "$tmp_config"
 
     chmod 600 "$tmp_config"

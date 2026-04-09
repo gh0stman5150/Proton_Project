@@ -6,6 +6,9 @@ STATE_FILE="${STATE_FILE:-/run/proton/proton-port.state}"
 CACHE_FILE="${CACHE_FILE:-/run/proton/qbt-port.cache}"
 LOG_TAG="${LOG_TAG:-proton-qbt}"
 CACHE_DIR="${CACHE_FILE%/*}"
+VPN_INTERFACE="${VPN_INTERFACE:-proton}"
+STATE_DIR="${STATE_DIR:-/run/proton}"
+SERVER_SELECTION_FILE="${SERVER_SELECTION_FILE:-${STATE_DIR}/current-server.env}"
 
 if [[ "$CACHE_DIR" == "$CACHE_FILE" ]]; then
     CACHE_DIR="."
@@ -58,6 +61,12 @@ fi
 
 QBITTORRENT_URL="${QBITTORRENT_URL%/}"
 
+if [[ -f "$SERVER_SELECTION_FILE" ]]; then
+    # shellcheck disable=SC1090
+    source "$SERVER_SELECTION_FILE"
+    VPN_INTERFACE="${SELECTED_VPN_INTERFACE:-$VPN_INTERFACE}"
+fi
+
 PORT="$(awk -F= '/^CURRENT_PORT=/ {print $2; exit}' "$STATE_FILE" 2>/dev/null || true)"
 
 if [[ -z "$PORT" ]]; then
@@ -65,37 +74,40 @@ if [[ -z "$PORT" ]]; then
     exit 0
 fi
 
+PORT_CHANGED=1
 if [[ -f "$CACHE_FILE" ]]; then
-    LAST_PORT="$(cat "$CACHE_FILE")"
+    LAST_PORT="$(cat "$CACHE_FILE" 2>/dev/null || true)"
     if [[ "$PORT" == "$LAST_PORT" ]]; then
-        log "Port unchanged ($PORT), skipping update"
-        exit 0
+        PORT_CHANGED=0
     fi
 fi
 
-log "Updating qBittorrent port -> $PORT"
+if (( PORT_CHANGED )); then
+    log "Updating qBittorrent port -> $PORT"
 
-AUTH_RESPONSE="$(curl -fsS -i \
-    --data "username=$QBITTORRENT_USER&password=$QBITTORRENT_PASS" \
-    "$QBITTORRENT_URL/api/v2/auth/login" || true)"
-COOKIE="$(printf '%s' "$AUTH_RESPONSE" | grep -Fi set-cookie | cut -d' ' -f2 | tr -d '\r')"
+    AUTH_RESPONSE="$(curl -fsS -i \
+        --data "username=$QBITTORRENT_USER&password=$QBITTORRENT_PASS" \
+        "$QBITTORRENT_URL/api/v2/auth/login" || true)"
+    COOKIE="$(printf '%s' "$AUTH_RESPONSE" | grep -Fi set-cookie | cut -d' ' -f2 | tr -d '\r')"
 
-if [[ -z "$COOKIE" ]]; then
-    log "ERROR: Authentication failed"
-    exit 1
+    if [[ -z "$COOKIE" ]]; then
+        log "ERROR: Authentication failed"
+        exit 1
+    fi
+
+    curl -fsS --cookie "$COOKIE" \
+        -X POST \
+        --data "json={\"listen_port\":$PORT}" \
+        "$QBITTORRENT_URL/api/v2/app/setPreferences" >/dev/null
+
+    umask 077
+    echo "$PORT" > "$CACHE_FILE"
+
+    log "qBittorrent updated successfully"
+else
+    log "Port unchanged ($PORT), skipping qBittorrent API update but refreshing DNAT"
 fi
 
-curl -fsS --cookie "$COOKIE" \
-    -X POST \
-    --data "json={\"listen_port\":$PORT}" \
-    "$QBITTORRENT_URL/api/v2/app/setPreferences" >/dev/null
-
-umask 077
-echo "$PORT" > "$CACHE_FILE"
-
-log "qBittorrent updated successfully"
-
-# --- DNAT: map public port -> qB container internal port (starr network) ---
 QBT_CONTAINER_NAME="${QBT_CONTAINER_NAME:-qbittorrent}"
 QBT_INTERNAL_PORT="${QBT_INTERNAL_PORT:-6881}"
 NFT_TABLE="proton_nat"
@@ -104,7 +116,7 @@ NFT_CHAIN="prerouting"
 ensure_nft_nat() {
     nft list table ip "$NFT_TABLE" >/dev/null 2>&1 || nft add table ip "$NFT_TABLE"
     nft list chain ip "$NFT_TABLE" "$NFT_CHAIN" >/dev/null 2>&1 || \
-        nft add chain ip "$NFT_TABLE" "$NFT_CHAIN" '{ type nat hook prerouting priority 0 ; }'
+        nft add chain ip "$NFT_TABLE" "$NFT_CHAIN" '{ type nat hook prerouting priority dstnat ; }'
 }
 
 container_ip_for() {
@@ -112,22 +124,18 @@ container_ip_for() {
     local network="${QBT_NETWORK_NAME:-}"
 
     if [[ -n "$network" ]]; then
-        # network-specific IP
         docker inspect -f "{{.NetworkSettings.Networks.$network.IPAddress}}" "$name" 2>/dev/null || true
         return
     fi
 
-    # fallback: first network IP
     docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$name" 2>/dev/null || true
 }
 
 remove_existing_qbt_dnat() {
-    # remove any existing rules we added with comment "qbt-dnat"
     if ! nft list chain ip "$NFT_TABLE" "$NFT_CHAIN" -a >/dev/null 2>&1; then
         return 0
     fi
 
-    # find handles for rules with comment qbt-dnat
     local handles
     handles=$(nft list chain ip "$NFT_TABLE" "$NFT_CHAIN" -a 2>/dev/null | awk '/qbt-dnat/ {for(i=1;i<=NF;i++) if($i=="handle") print $(i+1)}')
     if [[ -z "$handles" ]]; then
@@ -142,24 +150,22 @@ remove_existing_qbt_dnat() {
 add_qbt_dnat() {
     local pub_port="$1"
     local cip
-    cip=$(container_ip_for "$QBT_CONTAINER_NAME" )
+
+    cip=$(container_ip_for "$QBT_CONTAINER_NAME")
     if [[ -z "$cip" ]]; then
         log "WARNING: qBittorrent container '$QBT_CONTAINER_NAME' IP not found; skipping DNAT"
         return 0
     fi
 
     ensure_nft_nat
-    # Remove previous DNAT rules added by this script
     remove_existing_qbt_dnat
 
-    # Add new rule with a comment so we can identify it later
-    nft add rule ip "$NFT_TABLE" "$NFT_CHAIN" tcp dport "$pub_port" dnat to "$cip":"$QBT_INTERNAL_PORT" comment "qbt-dnat" || \
-        log "ERROR: Failed to add DNAT rule for qBittorrent"
+    nft add rule ip "$NFT_TABLE" "$NFT_CHAIN" iifname "$VPN_INTERFACE" tcp dport "$pub_port" dnat to "$cip":"$QBT_INTERNAL_PORT" comment "qbt-dnat" || \
+        log "ERROR: Failed to add TCP DNAT rule for qBittorrent"
+    nft add rule ip "$NFT_TABLE" "$NFT_CHAIN" iifname "$VPN_INTERFACE" udp dport "$pub_port" dnat to "$cip":"$QBT_INTERNAL_PORT" comment "qbt-dnat" || \
+        log "ERROR: Failed to add UDP DNAT rule for qBittorrent"
 
-    log "Installed DNAT: public $pub_port -> $cip:$QBT_INTERNAL_PORT"
+    log "Installed DNAT: ${VPN_INTERFACE} public $pub_port -> $cip:$QBT_INTERNAL_PORT (tcp/udp)"
 }
 
-# Update DNAT unless container mode is host or no container specified
-if [[ -n "$PORT" ]]; then
-    add_qbt_dnat "$PORT"
-fi
+add_qbt_dnat "$PORT"

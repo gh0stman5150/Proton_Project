@@ -12,9 +12,19 @@ BAD_SERVER_COOLDOWN="${BAD_SERVER_COOLDOWN:-900}"
 PING_TIMEOUT_SECONDS="${PING_TIMEOUT_SECONDS:-1}"
 PING_COUNT="${PING_COUNT:-1}"
 LOCK_FILE="${LOCK_FILE:-${STATE_DIR}/server-manager.lock}"
+SERVER_POOL_STRICT_LINT="${SERVER_POOL_STRICT_LINT:-on}"
+WG_EXPECTED_DNS="${WG_EXPECTED_DNS:-10.2.0.1}"
+WG_LINT_ALLOW_MISSING_DNS="${WG_LINT_ALLOW_MISSING_DNS:-off}"
 
 log() {
-    echo "$(date '+%F %T') | $*" | systemd-cat -t "$LOG_TAG"
+    local message
+    message="$(date '+%F %T') | $*"
+
+    if command -v systemd-cat >/dev/null 2>&1; then
+        echo "$message" | systemd-cat -t "$LOG_TAG"
+    else
+        echo "$message" >&2
+    fi
 }
 
 require_command() {
@@ -29,7 +39,7 @@ require_command() {
 require_common_tools() {
     local cmd
 
-    for cmd in awk chmod date mkdir mv rm systemd-cat; do
+    for cmd in awk chmod date mkdir mv rm; do
         require_command "$cmd"
     done
 }
@@ -54,6 +64,35 @@ candidate_configs() {
     fi
 
     printf '%s\n' "/etc/wireguard/${WG_PROFILE}.conf"
+}
+
+lint_targets() {
+    local target="${1:-}"
+    local config profile matched=0
+
+    if [[ -z "$target" ]]; then
+        candidate_configs
+        return 0
+    fi
+
+    if [[ -f "$target" ]]; then
+        printf '%s\n' "$target"
+        return 0
+    fi
+
+    while IFS= read -r config; do
+        [[ -f "$config" ]] || continue
+        profile="$(config_profile "$config")"
+        if [[ "$profile" == "$target" || "$(basename "$config")" == "$target" ]]; then
+            printf '%s\n' "$config"
+            matched=1
+        fi
+    done < <(candidate_configs)
+
+    if [[ "$matched" -eq 0 ]]; then
+        echo "ERROR: No WireGuard profile matched '$target'." >&2
+        exit 1
+    fi
 }
 
 config_profile() {
@@ -87,7 +126,120 @@ resolve_endpoint_ip() {
         return 0
     fi
 
-    getent ahostsv4 "$host" | awk 'NR == 1 {print $1}'
+    local ip
+    ip=$(getent ahostsv4 "$host" 2>/dev/null | awk 'NR == 1 {print $1}') || ip=""
+    if [[ -n "$ip" && "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        echo "$ip"
+        return 0
+    fi
+
+    return 1
+}
+
+trim_field() {
+    local value="$1"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    printf '%s\n' "$value"
+}
+
+normalize_csv() {
+    local csv="$1"
+    local old_ifs part trimmed out=""
+
+    old_ifs="$IFS"
+    IFS=','
+    for part in $csv; do
+        trimmed="$(trim_field "$part")"
+        [[ -n "$trimmed" ]] || continue
+        if [[ -n "$out" ]]; then
+            out="${out}, ${trimmed}"
+        else
+            out="$trimmed"
+        fi
+    done
+    IFS="$old_ifs"
+
+    printf '%s\n' "$out"
+}
+
+strict_lint_enabled() {
+    case "$SERVER_POOL_STRICT_LINT" in
+        1|true|yes|on)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+allow_missing_dns() {
+    case "$WG_LINT_ALLOW_MISSING_DNS" in
+        1|true|yes|on)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+config_dns_value() {
+    awk -F '=' '
+        /^[[:space:]]*DNS[[:space:]]*=/ {
+            value = substr($0, index($0, "=") + 1)
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+            if (value != "") {
+                out = out == "" ? value : out ", " value
+            }
+        }
+        END { print out }
+    ' "$1"
+}
+
+config_disallowed_directives() {
+    awk -F '=' '
+        /^[[:space:]]*(PreUp|PostUp|PreDown|PostDown|SaveConfig)[[:space:]]*=/ {
+            key = $1
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", key)
+            if (!(key in seen)) {
+                seen[key] = 1
+                out = out == "" ? key : out ", " key
+            }
+        }
+        END { print out }
+    ' "$1"
+}
+
+config_lint_reason() {
+    local config="$1"
+    local disallowed dns_value normalized_dns normalized_expected_dns
+
+    strict_lint_enabled || return 0
+
+    disallowed="$(config_disallowed_directives "$config")"
+    if [[ -n "$disallowed" ]]; then
+        printf 'disallowed directives present: %s\n' "$disallowed"
+        return 0
+    fi
+
+    dns_value="$(config_dns_value "$config")"
+    if [[ -z "$dns_value" ]]; then
+        if allow_missing_dns; then
+            return 0
+        fi
+
+        printf 'missing DNS directive (expected %s)\n' "$WG_EXPECTED_DNS"
+        return 0
+    fi
+
+    normalized_dns="$(normalize_csv "$dns_value")"
+    normalized_expected_dns="$(normalize_csv "$WG_EXPECTED_DNS")"
+
+    if [[ "$normalized_dns" != "$normalized_expected_dns" ]]; then
+        printf 'unexpected DNS value: %s (expected %s)\n' "$normalized_dns" "$normalized_expected_dns"
+    fi
 }
 
 cleanup_bad_servers() {
@@ -173,10 +325,16 @@ select_best_server() {
     cleanup_bad_servers
 
     while IFS= read -r config; do
-        local profile endpoint_host endpoint_ip endpoint_port latency_ms
+        local profile endpoint_host endpoint_ip endpoint_port latency_ms lint_reason
 
         [[ -f "$config" ]] || continue
         profile="$(config_profile "$config")"
+        lint_reason="$(config_lint_reason "$config")"
+
+        if [[ -n "$lint_reason" ]]; then
+            log "Skipping $profile because it failed config lint: $lint_reason"
+            continue
+        fi
 
         if [[ "$allow_bad" != "1" ]] && server_is_bad "$profile"; then
             log "Skipping cooling-down server $profile"
@@ -230,6 +388,26 @@ select_best_server() {
     rm -f "$SERVER_RESELECT_FILE"
     log "Selected server $best_profile (${best_endpoint_host}/${best_endpoint_ip}) with latency ${best_latency_ms}ms"
     cat "$SERVER_SELECTION_FILE"
+}
+
+lint_configs() {
+    local target="${1:-}"
+    local config profile lint_reason failed=0
+
+    while IFS= read -r config; do
+        [[ -f "$config" ]] || continue
+        profile="$(config_profile "$config")"
+        lint_reason="$(config_lint_reason "$config")"
+
+        if [[ -n "$lint_reason" ]]; then
+            printf 'FAIL\t%s\t%s\t%s\n' "$profile" "$config" "$lint_reason"
+            failed=1
+        else
+            printf 'OK\t%s\t%s\n' "$profile" "$config"
+        fi
+    done < <(lint_targets "$target")
+
+    return "$failed"
 }
 
 current_profile() {
@@ -291,6 +469,9 @@ case "${1:-select}" in
             select_best_server 0
         fi
         ;;
+    lint)
+        lint_configs "${2:-}"
+        ;;
     mark-bad)
         # Acquire lock for marking bad servers (modifies state)
         exec 200>"$LOCK_FILE"
@@ -307,7 +488,7 @@ case "${1:-select}" in
         reset_bad_servers
         ;;
     *)
-        echo "Usage: $0 {select|current|mark-bad|show-bad|reset-bad}" >&2
+        echo "Usage: $0 {select|current|lint [profile]|mark-bad|show-bad|reset-bad}" >&2
         exit 1
         ;;
 esac

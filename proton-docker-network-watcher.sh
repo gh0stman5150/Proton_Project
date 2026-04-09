@@ -16,19 +16,30 @@ VPN_TABLE="${VPN_TABLE:-51820}"
 RULE_PRIORITY="${RULE_PRIORITY:-110}"
 LAST_FILE="${LAST_FILE:-/run/proton/docker-network-watcher.last}"
 QBT_SYNC_SCRIPT="${QBT_SYNC_SCRIPT:-$DIR/proton-qbittorrent-sync-safe.sh}"
+QBITTORRENT_ENV_FILE="${QBITTORRENT_ENV_FILE:-/etc/proton/qbittorrent.env}"
+STATE_DIR="${STATE_DIR:-/run/proton}"
+SERVER_SELECTION_FILE="${SERVER_SELECTION_FILE:-${STATE_DIR}/current-server.env}"
 
 mkdir -p /run/proton
 touch "$LAST_FILE" 2>/dev/null || true
 
 # Optional environment files (installer places qB vars here)
-if [[ -f /etc/proton/proton-qbittorrent.env ]]; then
+if [[ -f "$QBITTORRENT_ENV_FILE" ]]; then
     # shellcheck disable=SC1090
-    source /etc/proton/proton-qbittorrent.env
+    source "$QBITTORRENT_ENV_FILE"
 fi
 if [[ -f /etc/proton/proton-common.env ]]; then
     # shellcheck disable=SC1090
     source /etc/proton/proton-common.env
 fi
+
+load_selected_server() {
+    if [[ -f "$SERVER_SELECTION_FILE" ]]; then
+        # shellcheck disable=SC1090
+        source "$SERVER_SELECTION_FILE"
+        VPN_INTERFACE="${SELECTED_VPN_INTERFACE:-$VPN_INTERFACE}"
+    fi
+}
 
 find_network_cidr() {
     local cidr=""
@@ -70,6 +81,8 @@ find_network_cidr() {
 
 reapply_routes() {
     local new_cidr="$1"
+
+    load_selected_server
     local old_cidr=""
     if [[ -f "$LAST_FILE" ]]; then
         old_cidr="$(cat "$LAST_FILE" 2>/dev/null || true)"
