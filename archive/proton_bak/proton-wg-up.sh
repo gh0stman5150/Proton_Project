@@ -4,7 +4,7 @@ set -euo pipefail
 LOG_TAG="proton-wg"
 
 log() {
-    echo "$(date '+%F %T') | $*" | systemd-cat -t "$LOG_TAG"
+	echo "$(date '+%F %T') | $*" | systemd-cat -t "$LOG_TAG"
 }
 
 log "Bringing up WireGuard..."

@@ -1,18 +1,19 @@
+#!/usr/bin/env bash
 # Remove all proton packages
 sudo apt remove --purge \
-    proton-vpn-daemon \
-    proton-vpn-gnome-desktop \
-    proton-vpn-gtk-app \
-    protonvpn-beta-release \
-    python3-proton-core \
-    python3-proton-keyring-linux \
-    python3-proton-vpn-api-core \
-    python3-proton-vpn-local-agent \
-    python3-proton-vpn-network-manager \
-    python3-proton-vpn-network-manager-openvpn \
-    python3-proton-vpn-killswitch \
-    python3-proton-vpn-killswitch-network-manager \
-    python3-proton-vpn-session -y
+	proton-vpn-daemon \
+	proton-vpn-gnome-desktop \
+	proton-vpn-gtk-app \
+	protonvpn-beta-release \
+	python3-proton-core \
+	python3-proton-keyring-linux \
+	python3-proton-vpn-api-core \
+	python3-proton-vpn-local-agent \
+	python3-proton-vpn-network-manager \
+	python3-proton-vpn-network-manager-openvpn \
+	python3-proton-vpn-killswitch \
+	python3-proton-vpn-killswitch-network-manager \
+	python3-proton-vpn-session -y
 
 # Remove repo and keys
 sudo rm -f /etc/apt/sources.list.d/proton*.list

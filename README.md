@@ -234,5 +234,3 @@ To disable the watcher:
 
 ```bash
 sudo systemctl disable --now proton-docker-watch.service
-```
-

@@ -11,22 +11,22 @@ ENV_SRC="/tmp/protonvpn-port-forward.env"
 BACKUP_DIR="/tmp/protonvpn-hardening-backup"
 
 require_file() {
-    local path="$1"
+	local path="$1"
 
-    if [[ ! -f "$path" ]]; then
-        echo "ERROR: Required file not found: $path" >&2
-        exit 1
-    fi
+	if [[ ! -f "$path" ]]; then
+		echo "ERROR: Required file not found: $path" >&2
+		exit 1
+	fi
 }
 
 for file in \
-    "$CONNECT_SRC" \
-    "$PORT_FORWARD_SRC" \
-    "$HEALTHCHECK_SRC" \
-    "$CONNECT_SERVICE_SRC" \
-    "$PORT_FORWARD_SERVICE_SRC" \
-    "$ENV_SRC"; do
-    require_file "$file"
+	"$CONNECT_SRC" \
+	"$PORT_FORWARD_SRC" \
+	"$HEALTHCHECK_SRC" \
+	"$CONNECT_SERVICE_SRC" \
+	"$PORT_FORWARD_SERVICE_SRC" \
+	"$ENV_SRC"; do
+	require_file "$file"
 done
 
 mkdir -p "$BACKUP_DIR"
@@ -34,13 +34,13 @@ mkdir -p "$BACKUP_DIR"
 sudo install -m 0755 /usr/local/bin/protonvpn-connect.sh "$BACKUP_DIR/protonvpn-connect.sh.bak"
 sudo install -m 0755 /usr/local/bin/protonvpn-port-forward.sh "$BACKUP_DIR/protonvpn-port-forward.sh.bak"
 if [[ -f /usr/local/bin/protonvpn-port-forward-healthcheck.sh ]]; then
-    sudo install -m 0755 /usr/local/bin/protonvpn-port-forward-healthcheck.sh "$BACKUP_DIR/protonvpn-port-forward-healthcheck.sh.bak"
+	sudo install -m 0755 /usr/local/bin/protonvpn-port-forward-healthcheck.sh "$BACKUP_DIR/protonvpn-port-forward-healthcheck.sh.bak"
 fi
 sudo install -m 0644 /etc/systemd/system/protonvpn-connect.service "$BACKUP_DIR/protonvpn-connect.service.bak"
 sudo install -m 0644 /etc/systemd/system/protonvpn-port-forward.service "$BACKUP_DIR/protonvpn-port-forward.service.bak"
 
 if [[ -f /etc/default/protonvpn-port-forward ]]; then
-    sudo install -m 0600 /etc/default/protonvpn-port-forward "$BACKUP_DIR/protonvpn-port-forward.env.bak"
+	sudo install -m 0600 /etc/default/protonvpn-port-forward "$BACKUP_DIR/protonvpn-port-forward.env.bak"
 fi
 
 sudo install -m 0755 "$CONNECT_SRC" /usr/local/bin/protonvpn-connect.sh

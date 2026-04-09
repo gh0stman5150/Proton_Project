@@ -16,64 +16,64 @@ MANAGE_RESOLVED_DNS="${MANAGE_RESOLVED_DNS:-auto}"
 RESOLVED_DNS_ROUTE_DOMAIN="${RESOLVED_DNS_ROUTE_DOMAIN:-~.}"
 
 log() {
-    local message
-    message="$(date '+%F %T') | $*"
+	local message
+	message="$(date '+%F %T') | $*"
 
-    if command -v systemd-cat >/dev/null 2>&1; then
-        echo "$message" | systemd-cat -t "$LOG_TAG"
-    else
-        echo "$message" >&2
-    fi
+	if command -v systemd-cat >/dev/null 2>&1; then
+		echo "$message" | systemd-cat -t "$LOG_TAG"
+	else
+		echo "$message" >&2
+	fi
 }
 
 require_command() {
-    local cmd="$1"
+	local cmd="$1"
 
-    if ! command -v "$cmd" >/dev/null 2>&1; then
-        log "ERROR: Required command '$cmd' is not installed."
-        exit 1
-    fi
+	if ! command -v "$cmd" >/dev/null 2>&1; then
+		log "ERROR: Required command '$cmd' is not installed."
+		exit 1
+	fi
 }
 
 resolved_dns_enabled() {
-    case "$MANAGE_RESOLVED_DNS" in
-        1|true|yes|on)
-            if command -v resolvectl >/dev/null 2>&1; then
-                return 0
-            fi
-            log "ERROR: MANAGE_RESOLVED_DNS is enabled but resolvectl is not installed."
-            exit 1
-            ;;
-        auto)
-            command -v resolvectl >/dev/null 2>&1
-            ;;
-        *)
-            return 1
-            ;;
-    esac
+	case "$MANAGE_RESOLVED_DNS" in
+	1 | true | yes | on)
+		if command -v resolvectl >/dev/null 2>&1; then
+			return 0
+		fi
+		log "ERROR: MANAGE_RESOLVED_DNS is enabled but resolvectl is not installed."
+		exit 1
+		;;
+	auto)
+		command -v resolvectl >/dev/null 2>&1
+		;;
+	*)
+		return 1
+		;;
+	esac
 }
 
 teardown_resolved_dns() {
-    local ifname="$1"
+	local ifname="$1"
 
-    resolved_dns_enabled || return 0
-    [[ -n "$ifname" ]] || return 0
+	resolved_dns_enabled || return 0
+	[[ -n "$ifname" ]] || return 0
 
-    resolvectl revert "$ifname" >/dev/null 2>&1 || true
-    resolvectl flush-caches >/dev/null 2>&1 || true
+	resolvectl revert "$ifname" >/dev/null 2>&1 || true
+	resolvectl flush-caches >/dev/null 2>&1 || true
 }
 
 for cmd in ip wg-quick; do
-    require_command "$cmd"
+	require_command "$cmd"
 done
 
 if [[ -f "$SERVER_SELECTION_FILE" ]]; then
-    # shellcheck disable=SC1090
-    source "$SERVER_SELECTION_FILE"
-    WG_PROFILE="${SELECTED_WG_PROFILE:-$WG_PROFILE}"
-    VPN_INTERFACE="${SELECTED_VPN_INTERFACE:-$VPN_INTERFACE}"
-    WG_CONFIG="${SELECTED_CONFIG:-$WG_CONFIG}"
-    FILTERED_CONFIG_PATH="${WG_RUNTIME_DIR}/${WG_PROFILE}.conf"
+	# shellcheck disable=SC1090
+	source "$SERVER_SELECTION_FILE"
+	WG_PROFILE="${SELECTED_WG_PROFILE:-$WG_PROFILE}"
+	VPN_INTERFACE="${SELECTED_VPN_INTERFACE:-$VPN_INTERFACE}"
+	WG_CONFIG="${SELECTED_CONFIG:-$WG_CONFIG}"
+	FILTERED_CONFIG_PATH="${WG_RUNTIME_DIR}/${WG_PROFILE}.conf"
 fi
 
 # Remove policy routing before tearing down the interface so the kernel
@@ -81,15 +81,15 @@ fi
 ip rule del fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100 2>/dev/null || true
 ip route flush table "$VPN_TABLE" 2>/dev/null || true
 if [[ -n "$DOCKER_NETWORK_CIDR" ]]; then
-    ip rule del from "$DOCKER_NETWORK_CIDR" lookup "$VPN_TABLE" priority 110 2>/dev/null || true
+	ip rule del from "$DOCKER_NETWORK_CIDR" lookup "$VPN_TABLE" priority 110 2>/dev/null || true
 fi
 
 teardown_resolved_dns "$VPN_INTERFACE"
 
 if [[ -f "$FILTERED_CONFIG_PATH" ]]; then
-    wg-quick down "$FILTERED_CONFIG_PATH" || true
+	wg-quick down "$FILTERED_CONFIG_PATH" || true
 elif [[ -f "$WG_CONFIG" ]]; then
-    wg-quick down "$WG_CONFIG" || true
+	wg-quick down "$WG_CONFIG" || true
 else
-    wg-quick down "$WG_PROFILE" || true
+	wg-quick down "$WG_PROFILE" || true
 fi

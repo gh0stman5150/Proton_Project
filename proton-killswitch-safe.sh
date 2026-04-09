@@ -22,152 +22,152 @@ SERVER_MANAGER_SCRIPT="${SERVER_MANAGER_SCRIPT:-/usr/local/bin/proton/proton-ser
 WG_POOL_DIR="${WG_POOL_DIR:-/etc/wireguard/proton-pool}"
 
 log() {
-    echo "$(date '+%F %T') | $*" | systemd-cat -t proton-killswitch
+	echo "$(date '+%F %T') | $*" | systemd-cat -t proton-killswitch
 }
 
 require_command() {
-    local cmd="$1"
+	local cmd="$1"
 
-    if ! command -v "$cmd" >/dev/null 2>&1; then
-        log "ERROR: Required command '$cmd' is not installed."
-        exit 1
-    fi
+	if ! command -v "$cmd" >/dev/null 2>&1; then
+		log "ERROR: Required command '$cmd' is not installed."
+		exit 1
+	fi
 }
 
 for cmd in awk chmod getent ip iptables mkdir systemd-cat tr; do
-    require_command "$cmd"
+	require_command "$cmd"
 done
 
 mkdir -p "$STATE_DIR"
 chmod 700 "$STATE_DIR"
 
 server_pool_requested() {
-    case "$SERVER_POOL_ENABLED" in
-        1|true|yes|on)
-            return 0
-            ;;
-        auto)
-            compgen -G "$WG_POOL_DIR/*.conf" >/dev/null
-            ;;
-        *)
-            return 1
-            ;;
-    esac
+	case "$SERVER_POOL_ENABLED" in
+	1 | true | yes | on)
+		return 0
+		;;
+	auto)
+		compgen -G "$WG_POOL_DIR/*.conf" >/dev/null
+		;;
+	*)
+		return 1
+		;;
+	esac
 }
 
 load_selected_server() {
-    if ! server_pool_requested; then
-        return 0
-    fi
+	if ! server_pool_requested; then
+		return 0
+	fi
 
-    if [[ ! -x "$SERVER_MANAGER_SCRIPT" ]]; then
-        log "ERROR: Server manager script is not executable: $SERVER_MANAGER_SCRIPT"
-        exit 1
-    fi
+	if [[ ! -x "$SERVER_MANAGER_SCRIPT" ]]; then
+		log "ERROR: Server manager script is not executable: $SERVER_MANAGER_SCRIPT"
+		exit 1
+	fi
 
-    if [[ -f "$SERVER_SELECTION_FILE" && ! -f "$SERVER_RESELECT_FILE" ]]; then
-        # shellcheck disable=SC1090
-        source "$SERVER_SELECTION_FILE"
-    else
-        "$SERVER_MANAGER_SCRIPT" select >/dev/null
-    fi
+	if [[ -f "$SERVER_SELECTION_FILE" && ! -f "$SERVER_RESELECT_FILE" ]]; then
+		# shellcheck disable=SC1090
+		source "$SERVER_SELECTION_FILE"
+	else
+		"$SERVER_MANAGER_SCRIPT" select >/dev/null
+	fi
 
-    if [[ -f "$SERVER_SELECTION_FILE" ]]; then
-        # shellcheck disable=SC1090
-        source "$SERVER_SELECTION_FILE"
-        WG_PROFILE="${SELECTED_WG_PROFILE:-$WG_PROFILE}"
-        VPN_IF="${SELECTED_VPN_INTERFACE:-$VPN_IF}"
-        WG_CONFIG="${SELECTED_CONFIG:-$WG_CONFIG}"
-        WG_ENDPOINT_IP="${SELECTED_ENDPOINT_IP:-$WG_ENDPOINT_IP}"
-    fi
+	if [[ -f "$SERVER_SELECTION_FILE" ]]; then
+		# shellcheck disable=SC1090
+		source "$SERVER_SELECTION_FILE"
+		WG_PROFILE="${SELECTED_WG_PROFILE:-$WG_PROFILE}"
+		VPN_IF="${SELECTED_VPN_INTERFACE:-$VPN_IF}"
+		WG_CONFIG="${SELECTED_CONFIG:-$WG_CONFIG}"
+		WG_ENDPOINT_IP="${SELECTED_ENDPOINT_IP:-$WG_ENDPOINT_IP}"
+	fi
 }
 
 require_value() {
-    local name="$1"
-    local value="$2"
+	local name="$1"
+	local value="$2"
 
-    if [[ -z "$value" ]]; then
-        log "ERROR: Missing required value for $name"
-        exit 1
-    fi
+	if [[ -z "$value" ]]; then
+		log "ERROR: Missing required value for $name"
+		exit 1
+	fi
 }
 
 trim_field() {
-    local value="$1"
-    value="${value#"${value%%[![:space:]]*}"}"
-    value="${value%"${value##*[![:space:]]}"}"
-    printf '%s\n' "$value"
+	local value="$1"
+	value="${value#"${value%%[![:space:]]*}"}"
+	value="${value%"${value##*[![:space:]]}"}"
+	printf '%s\n' "$value"
 }
 
 for_each_csv() {
-    local csv="$1"
-    local callback="$2"
-    local old_ifs item trimmed
+	local csv="$1"
+	local callback="$2"
+	local old_ifs item trimmed
 
-    old_ifs="$IFS"
-    IFS=','
-    for item in $csv; do
-        trimmed="$(trim_field "$item")"
-        if [[ -n "$trimmed" ]]; then
-            "$callback" "$trimmed"
-        fi
-    done
-    IFS="$old_ifs"
+	old_ifs="$IFS"
+	IFS=','
+	for item in $csv; do
+		trimmed="$(trim_field "$item")"
+		if [[ -n "$trimmed" ]]; then
+			"$callback" "$trimmed"
+		fi
+	done
+	IFS="$old_ifs"
 }
 
 allow_management_tcp_for_cidr() {
-    local cidr="$1"
-    local port
+	local cidr="$1"
+	local port
 
-    while IFS= read -r port; do
-        iptables -A "$INPUT_CHAIN" -i "$LAN_IF" -p tcp -s "$cidr" --dport "$port" -j ACCEPT
-    done < <(printf '%s\n' "$MANAGEMENT_TCP_PORTS" | tr ',' '\n' | awk '{$1=$1; print}')
+	while IFS= read -r port; do
+		iptables -A "$INPUT_CHAIN" -i "$LAN_IF" -p tcp -s "$cidr" --dport "$port" -j ACCEPT
+	done < <(printf '%s\n' "$MANAGEMENT_TCP_PORTS" | tr ',' '\n' | awk '{$1=$1; print}')
 }
 
 allow_management_udp_for_cidr() {
-    local cidr="$1"
-    local port
+	local cidr="$1"
+	local port
 
-    while IFS= read -r port; do
-        iptables -A "$INPUT_CHAIN" -i "$LAN_IF" -p udp -s "$cidr" --dport "$port" -j ACCEPT
-    done < <(printf '%s\n' "$MANAGEMENT_UDP_PORTS" | tr ',' '\n' | awk '{$1=$1; print}')
+	while IFS= read -r port; do
+		iptables -A "$INPUT_CHAIN" -i "$LAN_IF" -p udp -s "$cidr" --dport "$port" -j ACCEPT
+	done < <(printf '%s\n' "$MANAGEMENT_UDP_PORTS" | tr ',' '\n' | awk '{$1=$1; print}')
 }
 
 get_endpoint_value() {
-    awk -F '=' '/^[[:space:]]*Endpoint[[:space:]]*=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit}' "$WG_CONFIG"
+	awk -F '=' '/^[[:space:]]*Endpoint[[:space:]]*=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit}' "$WG_CONFIG"
 }
 
 get_endpoint_host() {
-    local endpoint
-    endpoint="$(get_endpoint_value)"
-    endpoint="${endpoint%:*}"
-    endpoint="${endpoint#[}"
-    endpoint="${endpoint%]}"
-    echo "$endpoint"
+	local endpoint
+	endpoint="$(get_endpoint_value)"
+	endpoint="${endpoint%:*}"
+	endpoint="${endpoint#[}"
+	endpoint="${endpoint%]}"
+	echo "$endpoint"
 }
 
 get_endpoint_port() {
-    local endpoint
-    endpoint="$(get_endpoint_value)"
-    echo "${endpoint##*:}"
+	local endpoint
+	endpoint="$(get_endpoint_value)"
+	echo "${endpoint##*:}"
 }
 
 resolve_endpoint_ip() {
-    local host="$1"
+	local host="$1"
 
-    if [[ "$host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        echo "$host"
-        return 0
-    fi
+	if [[ "$host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+		echo "$host"
+		return 0
+	fi
 
-    local ip
-    ip=$(getent ahostsv4 "$host" 2>/dev/null | awk 'NR == 1 {print $1}') || ip=""
-    if [[ -n "$ip" && "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        echo "$ip"
-        return 0
-    fi
+	local ip
+	ip=$(getent ahostsv4 "$host" 2>/dev/null | awk 'NR == 1 {print $1}') || ip=""
+	if [[ -n "$ip" && "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+		echo "$ip"
+		return 0
+	fi
 
-    return 1
+	return 1
 }
 
 load_selected_server
@@ -177,8 +177,8 @@ require_value "LAN_CIDR" "$LAN_CIDR"
 require_value "WG_CONFIG" "$WG_CONFIG"
 
 if [[ ! -f "$WG_CONFIG" ]]; then
-    log "ERROR: WireGuard config not found: $WG_CONFIG"
-    exit 1
+	log "ERROR: WireGuard config not found: $WG_CONFIG"
+	exit 1
 fi
 
 ENDPOINT_HOST="$(get_endpoint_host)"
@@ -194,18 +194,18 @@ require_value "WireGuard endpoint IP" "$ENDPOINT_IP"
 # Docker-managed FORWARD/nat rules during startup.
 
 ensure_chain() {
-    local chain="$1"
+	local chain="$1"
 
-    iptables -N "$chain" 2>/dev/null || true
-    iptables -F "$chain"
+	iptables -N "$chain" 2>/dev/null || true
+	iptables -F "$chain"
 }
 
 ensure_jump_rule() {
-    local parent="$1"
-    local chain="$2"
+	local parent="$1"
+	local chain="$2"
 
-    iptables -D "$parent" -j "$chain" 2>/dev/null || true
-    iptables -I "$parent" 1 -j "$chain"
+	iptables -D "$parent" -j "$chain" 2>/dev/null || true
+	iptables -I "$parent" 1 -j "$chain"
 }
 
 ensure_chain "$INPUT_CHAIN"
@@ -237,13 +237,13 @@ iptables -A "$INPUT_CHAIN" -i "$VPN_IF" -j ACCEPT
 # Bypass selected outbound ports — these go direct via ISP without VPN.
 # SSH and RDP are bypassed by default so management access is never lost.
 while IFS= read -r _port; do
-    [[ -n "$_port" ]] || continue
-    iptables -A "$OUTPUT_CHAIN" -o "$LAN_IF" -p tcp --dport "$_port" -j ACCEPT
+	[[ -n "$_port" ]] || continue
+	iptables -A "$OUTPUT_CHAIN" -o "$LAN_IF" -p tcp --dport "$_port" -j ACCEPT
 done < <(printf '%s\n' "$BYPASS_TCP_PORTS" | tr ',' '\n' | awk '{$1=$1; print}')
 
 while IFS= read -r _port; do
-    [[ -n "$_port" ]] || continue
-    iptables -A "$OUTPUT_CHAIN" -o "$LAN_IF" -p udp --dport "$_port" -j ACCEPT
+	[[ -n "$_port" ]] || continue
+	iptables -A "$OUTPUT_CHAIN" -o "$LAN_IF" -p udp --dport "$_port" -j ACCEPT
 done < <(printf '%s\n' "$BYPASS_UDP_PORTS" | tr ',' '\n' | awk '{$1=$1; print}')
 
 iptables -A "$OUTPUT_CHAIN" -j DROP
