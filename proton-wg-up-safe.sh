@@ -18,10 +18,14 @@ KILLSWITCH_SCRIPT="${KILLSWITCH_SCRIPT:-/usr/local/bin/proton/proton-killswitch-
 VPN_FWMARK="${VPN_FWMARK:-0xca6c}"
 VPN_TABLE="${VPN_TABLE:-51820}"
 DOCKER_NETWORK_CIDR="${DOCKER_NETWORK_CIDR:-}"
+MANAGE_RESOLVED_DNS="${MANAGE_RESOLVED_DNS:-auto}"
+RESOLVED_DNS_ROUTE_DOMAIN="${RESOLVED_DNS_ROUTE_DOMAIN:-~.}"
 PREVIOUS_WG_PROFILE="$WG_PROFILE"
 PREVIOUS_WG_CONFIG=""
+PREVIOUS_VPN_INTERFACE="$VPN_INTERFACE"
 WG_CONFIG_TO_USE="$WG_CONFIG"
 FILTERED_CONFIG_PATH="${WG_RUNTIME_DIR}/${WG_PROFILE}.conf"
+DNS_SERVERS_CSV=""
 
 log() {
     echo "$(date '+%F %T') | $*" | systemd-cat -t "$LOG_TAG"
@@ -59,12 +63,31 @@ server_pool_requested() {
     esac
 }
 
+resolved_dns_enabled() {
+    case "$MANAGE_RESOLVED_DNS" in
+        1|true|yes|on)
+            if command -v resolvectl >/dev/null 2>&1; then
+                return 0
+            fi
+            log "ERROR: MANAGE_RESOLVED_DNS is enabled but resolvectl is not installed."
+            exit 1
+            ;;
+        auto)
+            command -v resolvectl >/dev/null 2>&1
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 load_selected_server() {
     if [[ -f "$SERVER_SELECTION_FILE" ]]; then
         # shellcheck disable=SC1090
         source "$SERVER_SELECTION_FILE"
         PREVIOUS_WG_PROFILE="${SELECTED_WG_PROFILE:-$WG_PROFILE}"
         PREVIOUS_WG_CONFIG="${SELECTED_CONFIG:-}"
+        PREVIOUS_VPN_INTERFACE="${SELECTED_VPN_INTERFACE:-$PREVIOUS_VPN_INTERFACE}"
     fi
 
     if ! server_pool_requested; then
@@ -108,28 +131,64 @@ trim_field() {
     printf '%s\n' "$value"
 }
 
-ipv4_only_csv() {
-    local csv="$1"
-    local old_ifs part trimmed result=""
+config_dns_servers() {
+    awk -F '=' '
+        /^[[:space:]]*DNS[[:space:]]*=/ {
+            value = substr($0, index($0, "=") + 1)
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+            if (value != "") {
+                out = out == "" ? value : out ", " value
+            }
+        }
+        END { print out }
+    ' "$1"
+}
+
+teardown_resolved_dns() {
+    local ifname="$1"
+
+    resolved_dns_enabled || return 0
+    [[ -n "$ifname" ]] || return 0
+
+    resolvectl revert "$ifname" >/dev/null 2>&1 || true
+    resolvectl flush-caches >/dev/null 2>&1 || true
+}
+
+configure_resolved_dns() {
+    local ifname="$1"
+    local dns_csv="$2"
+    local old_ifs item trimmed
+    local dns_servers=()
+
+    resolved_dns_enabled || return 0
+    [[ -n "$ifname" ]] || return 0
+
+    if [[ -z "$dns_csv" ]]; then
+        log "No DNS servers were defined in $WG_CONFIG_TO_USE; skipping systemd-resolved configuration"
+        return 0
+    fi
 
     old_ifs="$IFS"
     IFS=','
-    for part in $csv; do
-        trimmed="$(trim_field "$part")"
-        if [[ "$trimmed" == *:* ]]; then
-            continue
-        fi
-        if [[ -n "$trimmed" ]]; then
-            if [[ -n "$result" ]]; then
-                result="${result}, ${trimmed}"
-            else
-                result="$trimmed"
-            fi
-        fi
+    for item in $dns_csv; do
+        trimmed="$(trim_field "$item")"
+        [[ -n "$trimmed" ]] || continue
+        dns_servers+=("$trimmed")
     done
     IFS="$old_ifs"
 
-    printf '%s\n' "$result"
+    if [[ "${#dns_servers[@]}" -eq 0 ]]; then
+        log "No usable DNS servers were parsed from $WG_CONFIG_TO_USE; skipping systemd-resolved configuration"
+        return 0
+    fi
+
+    resolvectl dns "$ifname" "${dns_servers[@]}"
+    if [[ -n "$RESOLVED_DNS_ROUTE_DOMAIN" ]]; then
+        resolvectl domain "$ifname" "$RESOLVED_DNS_ROUTE_DOMAIN"
+    fi
+    resolvectl default-route "$ifname" yes
+    resolvectl flush-caches >/dev/null 2>&1 || true
+    log "Configured systemd-resolved DNS on $ifname: $dns_csv"
 }
 
 prepare_wg_config() {
@@ -230,8 +289,11 @@ prepare_wg_config() {
 
 load_selected_server
 prepare_wg_config "$WG_CONFIG"
+DNS_SERVERS_CSV="$(config_dns_servers "$WG_CONFIG_TO_USE")"
 
 log "Bringing up WireGuard profile $WG_PROFILE..."
+
+teardown_resolved_dns "$PREVIOUS_VPN_INTERFACE"
 
 if [[ -n "$PREVIOUS_WG_CONFIG" && -f "$PREVIOUS_WG_CONFIG" ]]; then
     wg-quick down "$PREVIOUS_WG_CONFIG" 2>/dev/null || true
@@ -244,8 +306,12 @@ if [[ -x "$KILLSWITCH_SCRIPT" ]]; then
 fi
 
 wg-quick up "$WG_CONFIG_TO_USE"
+configure_resolved_dns "$VPN_INTERFACE" "$DNS_SERVERS_CSV"
 
 inject_routes() {
+    local candidate=""
+    local subnet=""
+
     # Attempt to auto-detect a Docker 'starr' network subnet if DOCKER_NETWORK_CIDR
     # was not provided and the docker CLI is available. This helps when the
     # qBittorrent container lives on a starr network and you want container
@@ -261,7 +327,7 @@ inject_routes() {
         fi
     fi
     # Remove any stale routes from a previous interface before installing
-    # new ones.  On pool failover the old interface is gone but its routes
+    # new ones. On pool failover the old interface is gone but its routes
     # linger in the main table until explicitly deleted.
     if [[ -n "$DOCKER_NETWORK_CIDR" ]]; then
         ip route del "$DOCKER_NETWORK_CIDR" 2>/dev/null || true

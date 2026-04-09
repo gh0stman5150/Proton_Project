@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+LOG_TAG="${LOG_TAG:-proton-wg}"
 WG_PROFILE="${WG_PROFILE:-proton}"
+VPN_INTERFACE="${VPN_INTERFACE:-$WG_PROFILE}"
 STATE_DIR="${STATE_DIR:-/run/proton}"
 WG_RUNTIME_DIR="${WG_RUNTIME_DIR:-/etc/wireguard/proton-runtime}"
 SERVER_SELECTION_FILE="${SERVER_SELECTION_FILE:-${STATE_DIR}/current-server.env}"
@@ -10,16 +12,66 @@ FILTERED_CONFIG_PATH="${WG_RUNTIME_DIR}/${WG_PROFILE}.conf"
 VPN_FWMARK="${VPN_FWMARK:-0xca6c}"
 VPN_TABLE="${VPN_TABLE:-51820}"
 DOCKER_NETWORK_CIDR="${DOCKER_NETWORK_CIDR:-}"
+MANAGE_RESOLVED_DNS="${MANAGE_RESOLVED_DNS:-auto}"
+RESOLVED_DNS_ROUTE_DOMAIN="${RESOLVED_DNS_ROUTE_DOMAIN:-~.}"
 
-if ! command -v wg-quick >/dev/null 2>&1; then
-    echo "ERROR: Required command 'wg-quick' is not installed." >&2
-    exit 1
-fi
+log() {
+    local message
+    message="$(date '+%F %T') | $*"
+
+    if command -v systemd-cat >/dev/null 2>&1; then
+        echo "$message" | systemd-cat -t "$LOG_TAG"
+    else
+        echo "$message" >&2
+    fi
+}
+
+require_command() {
+    local cmd="$1"
+
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+        log "ERROR: Required command '$cmd' is not installed."
+        exit 1
+    fi
+}
+
+resolved_dns_enabled() {
+    case "$MANAGE_RESOLVED_DNS" in
+        1|true|yes|on)
+            if command -v resolvectl >/dev/null 2>&1; then
+                return 0
+            fi
+            log "ERROR: MANAGE_RESOLVED_DNS is enabled but resolvectl is not installed."
+            exit 1
+            ;;
+        auto)
+            command -v resolvectl >/dev/null 2>&1
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+teardown_resolved_dns() {
+    local ifname="$1"
+
+    resolved_dns_enabled || return 0
+    [[ -n "$ifname" ]] || return 0
+
+    resolvectl revert "$ifname" >/dev/null 2>&1 || true
+    resolvectl flush-caches >/dev/null 2>&1 || true
+}
+
+for cmd in ip wg-quick; do
+    require_command "$cmd"
+done
 
 if [[ -f "$SERVER_SELECTION_FILE" ]]; then
     # shellcheck disable=SC1090
     source "$SERVER_SELECTION_FILE"
     WG_PROFILE="${SELECTED_WG_PROFILE:-$WG_PROFILE}"
+    VPN_INTERFACE="${SELECTED_VPN_INTERFACE:-$VPN_INTERFACE}"
     WG_CONFIG="${SELECTED_CONFIG:-$WG_CONFIG}"
     FILTERED_CONFIG_PATH="${WG_RUNTIME_DIR}/${WG_PROFILE}.conf"
 fi
@@ -31,6 +83,8 @@ ip route flush table "$VPN_TABLE" 2>/dev/null || true
 if [[ -n "$DOCKER_NETWORK_CIDR" ]]; then
     ip rule del from "$DOCKER_NETWORK_CIDR" lookup "$VPN_TABLE" priority 110 2>/dev/null || true
 fi
+
+teardown_resolved_dns "$VPN_INTERFACE"
 
 if [[ -f "$FILTERED_CONFIG_PATH" ]]; then
     wg-quick down "$FILTERED_CONFIG_PATH" || true

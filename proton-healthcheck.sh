@@ -2,9 +2,23 @@
 
 set -euo pipefail
 
+LOG_TAG="${LOG_TAG:-proton-healthcheck}"
+STATE_DIR="${STATE_DIR:-/run/proton}"
+RECOVERY_LOCK_FILE="${RECOVERY_LOCK_FILE:-${STATE_DIR}/recovery.lock}"
 QBITTORRENT_ENV_FILE="${QBITTORRENT_ENV_FILE:-/etc/proton/qbittorrent.env}"
 QBITTORRENT_URL="${QBITTORRENT_URL:-}"
 SERVER_MANAGER_SCRIPT="${SERVER_MANAGER_SCRIPT:-/usr/local/bin/proton/proton-server-manager.sh}"
+
+log() {
+    local message
+    message="$(date '+%F %T') | $*"
+
+    if command -v systemd-cat >/dev/null 2>&1; then
+        echo "$message" | systemd-cat -t "$LOG_TAG"
+    else
+        echo "$message" >&2
+    fi
+}
 
 require_command() {
     local cmd="$1"
@@ -15,7 +29,7 @@ require_command() {
     fi
 }
 
-for cmd in curl ip natpmpc stat systemd-cat; do
+for cmd in awk curl flock stat systemctl; do
     require_command "$cmd"
 done
 
@@ -94,7 +108,20 @@ combined_speed_bps() {
     '
 }
 
-recover() {
+with_recovery_lock() {
+    local action="$1"
+    shift
+
+    (
+        flock -n 201 || {
+            log "Recovery lock busy, skipping ${action}"
+            exit 99
+        }
+        "$@"
+    ) 201>"$RECOVERY_LOCK_FILE"
+}
+
+perform_recovery() {
     local speed="$1"
 
     log "Throughput stayed below threshold at ${speed} B/s; restarting Proton services"
@@ -104,6 +131,21 @@ recover() {
     fi
 
     systemctl restart proton-killswitch.service proton-wg.service proton-port-forward.service
+}
+
+recover() {
+    local speed="$1"
+
+    if with_recovery_lock "healthcheck recovery" perform_recovery "$speed"; then
+        return 0
+    fi
+
+    local rc=$?
+    if [[ "$rc" -eq 99 ]]; then
+        return 0
+    fi
+
+    return "$rc"
 }
 
 LOW_SPEED_COUNT=0

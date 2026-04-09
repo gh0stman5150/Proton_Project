@@ -9,6 +9,8 @@ SERVER_RESELECT_FILE="${SERVER_RESELECT_FILE:-${STATE_DIR}/reselect-server.flag}
 WG_PROFILE="${WG_PROFILE:-proton}"
 WG_POOL_DIR="${WG_POOL_DIR:-/etc/wireguard/proton-pool}"
 BAD_SERVER_COOLDOWN="${BAD_SERVER_COOLDOWN:-900}"
+SERVER_SWITCH_MIN_IMPROVEMENT_MS="${SERVER_SWITCH_MIN_IMPROVEMENT_MS:-10}"
+SERVER_SWITCH_DEGRADED_LATENCY_MS="${SERVER_SWITCH_DEGRADED_LATENCY_MS:-75}"
 PING_TIMEOUT_SECONDS="${PING_TIMEOUT_SECONDS:-1}"
 PING_COUNT="${PING_COUNT:-1}"
 LOCK_FILE="${LOCK_FILE:-${STATE_DIR}/server-manager.lock}"
@@ -39,7 +41,7 @@ require_command() {
 require_common_tools() {
     local cmd
 
-    for cmd in awk chmod date mkdir mv rm; do
+    for cmd in awk chmod date flock mkdir mv rm; do
         require_command "$cmd"
     done
 }
@@ -97,6 +99,19 @@ lint_targets() {
 
 config_profile() {
     basename "$1" .conf
+}
+
+selection_value() {
+    local key="$1"
+
+    [[ -f "$SERVER_SELECTION_FILE" ]] || return 1
+
+    awk -F '=' -v key="$key" '
+        $1 == key {
+            print substr($0, index($0, "=") + 1)
+            exit
+        }
+    ' "$SERVER_SELECTION_FILE"
 }
 
 config_endpoint_value() {
@@ -284,6 +299,60 @@ measure_latency_ms() {
         '
 }
 
+prefer_current_selection() {
+    local current_profile="$1"
+    local current_config="$2"
+    local current_endpoint_host="$3"
+    local current_endpoint_ip="$4"
+    local current_endpoint_port="$5"
+    local current_latency_ms="$6"
+    local best_profile="$7"
+    local best_latency_ms="$8"
+    local improvement_ms
+
+    [[ -n "$current_profile" ]] || return 1
+    [[ -n "$best_profile" ]] || return 1
+    [[ "$current_profile" != "$best_profile" ]] || return 1
+    [[ "$current_latency_ms" =~ ^[0-9]+$ ]] || return 1
+    [[ "$best_latency_ms" =~ ^[0-9]+$ ]] || return 1
+
+    if (( current_latency_ms >= SERVER_SWITCH_DEGRADED_LATENCY_MS )); then
+        if (( best_latency_ms < current_latency_ms )); then
+            log "Switching away from current server $current_profile because latency ${current_latency_ms}ms exceeds degraded threshold ${SERVER_SWITCH_DEGRADED_LATENCY_MS}ms"
+            return 1
+        fi
+
+        log "Keeping current server $current_profile despite degraded latency ${current_latency_ms}ms because no better candidate was available"
+        printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$current_profile" \
+            "$current_config" \
+            "$current_endpoint_host" \
+            "$current_endpoint_ip" \
+            "$current_endpoint_port" \
+            "$current_latency_ms"
+        return 0
+    fi
+
+    improvement_ms=$((current_latency_ms - best_latency_ms))
+    if (( improvement_ms < 0 )); then
+        improvement_ms=0
+    fi
+
+    if (( improvement_ms < SERVER_SWITCH_MIN_IMPROVEMENT_MS )); then
+        log "Keeping current server $current_profile; best alternative only improves latency by ${improvement_ms}ms"
+        printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$current_profile" \
+            "$current_config" \
+            "$current_endpoint_host" \
+            "$current_endpoint_ip" \
+            "$current_endpoint_port" \
+            "$current_latency_ms"
+        return 0
+    fi
+
+    return 1
+}
+
 save_selection() {
     local profile="$1"
     local config="$2"
@@ -319,10 +388,19 @@ select_best_server() {
     local best_endpoint_ip=""
     local best_endpoint_port=""
     local best_latency_ms=""
+    local current_selected_profile=""
+    local current_profile=""
+    local current_config=""
+    local current_endpoint_host=""
+    local current_endpoint_ip=""
+    local current_endpoint_port=""
+    local current_latency_ms=""
+    local preferred_selection=""
     local config
 
     require_selection_tools
     cleanup_bad_servers
+    current_selected_profile="$(selection_value SELECTED_WG_PROFILE || true)"
 
     while IFS= read -r config; do
         local profile endpoint_host endpoint_ip endpoint_port latency_ms lint_reason
@@ -356,6 +434,15 @@ select_best_server() {
             log "Latency probe failed for $profile, treating it as a fallback candidate"
         fi
 
+        if [[ -n "$current_selected_profile" && "$profile" == "$current_selected_profile" ]]; then
+            current_profile="$profile"
+            current_config="$config"
+            current_endpoint_host="$endpoint_host"
+            current_endpoint_ip="$endpoint_ip"
+            current_endpoint_port="$endpoint_port"
+            current_latency_ms="$latency_ms"
+        fi
+
         if [[ -z "$best_latency_ms" || "$latency_ms" -lt "$best_latency_ms" ]]; then
             best_profile="$profile"
             best_config="$config"
@@ -375,6 +462,24 @@ select_best_server() {
     if [[ -z "$best_profile" ]]; then
         log "ERROR: No WireGuard profiles were available for selection."
         exit 1
+    fi
+
+    if preferred_selection="$(prefer_current_selection \
+        "$current_profile" \
+        "$current_config" \
+        "$current_endpoint_host" \
+        "$current_endpoint_ip" \
+        "$current_endpoint_port" \
+        "$current_latency_ms" \
+        "$best_profile" \
+        "$best_latency_ms")"; then
+        IFS=$'\t' read -r \
+            best_profile \
+            best_config \
+            best_endpoint_host \
+            best_endpoint_ip \
+            best_endpoint_port \
+            best_latency_ms <<< "$preferred_selection"
     fi
 
     save_selection \

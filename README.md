@@ -97,6 +97,7 @@ Live port-forward state is stored under `/run/proton`:
 - `/run/proton/current-server.env`
 - `/run/proton/bad-servers.tsv`
 - `/run/proton/reselect-server.flag`
+- `/run/proton/recovery.lock`
 
 Do not keep live state files in the repository.
 
@@ -104,7 +105,7 @@ Do not keep live state files in the repository.
 
 If `/etc/wireguard/proton-pool` contains one or more `*.conf` files, the active path automatically treats that directory as a rotation pool. Each reconnect or bad-node recovery can select the lowest-latency candidate by probing the endpoint IP from each config.
 
-The selector stores the active choice in `/run/proton/current-server.env` and tracks cooldowns in `/run/proton/bad-servers.tsv`.
+The selector stores the active choice in `/run/proton/current-server.env` and tracks cooldowns in `/run/proton/bad-servers.tsv`. It also applies hysteresis so the current server is kept unless a replacement is meaningfully better or the current server is degraded.
 
 By default the selector also lints each candidate before it can be selected. It rejects configs that contain `PreUp`, `PostUp`, `PreDown`, `PostDown`, or `SaveConfig`, and it expects `DNS` to match `WG_EXPECTED_DNS` unless `WG_LINT_ALLOW_MISSING_DNS=on`.
 
@@ -113,6 +114,8 @@ Useful knobs:
 - `WG_POOL_DIR=/etc/wireguard/proton-pool`
 - `SERVER_POOL_ENABLED=auto`
 - `BAD_SERVER_COOLDOWN=900`
+- `SERVER_SWITCH_MIN_IMPROVEMENT_MS=10`
+- `SERVER_SWITCH_DEGRADED_LATENCY_MS=75`
 - `PING_TIMEOUT_SECONDS=1`
 - `PING_COUNT=1`
 - `SERVER_POOL_STRICT_LINT=on`
@@ -134,6 +137,9 @@ The units default to:
 - `WG_PROFILE=proton`
 - `VPN_INTERFACE=proton`
 - `NATPMP_GATEWAY=10.2.0.1`
+- `MANAGEMENT_ALLOWED_CIDRS=192.168.237.0/24,203.0.113.4/32`
+- `MANAGE_RESOLVED_DNS=auto`
+- `RESOLVED_DNS_ROUTE_DOMAIN=~.`
 
 If your WireGuard profile or interface uses different names, update the env files consumed by:
 
@@ -144,11 +150,13 @@ If your WireGuard profile or interface uses different names, update the env file
 
 IPv6 is intentionally not managed by the kill-switch script because it is disabled in the Proton/WireGuard profile.
 
+When `MANAGE_RESOLVED_DNS=auto` and `resolvectl` is available, the WireGuard up/down scripts explicitly program and revert interface DNS using the selected profile DNS values. That helps keep host DNS pinned to the tunnel on `systemd-resolved` systems.
+
 If qBittorrent runs in a bridged Docker network and you also want container egress constrained by the VPN, handle that at the container/network-namespace level. The host kill switch is now careful not to overwrite Docker's own firewall chains.
 
 ## Healthcheck
 
-`proton-healthcheck.service` watches qBittorrent only when there are active transfers. If combined download and upload throughput stays below the configured threshold for multiple checks, it marks the current server bad and restarts the Proton services.
+`proton-healthcheck.service` watches qBittorrent only when there are active transfers. If combined download and upload throughput stays below the configured threshold for multiple checks, it marks the current server bad and restarts the Proton services. The healthcheck and port-forward loop share `RECOVERY_LOCK_FILE` so they do not trigger overlapping reconnect storms.
 
 Default thresholds:
 

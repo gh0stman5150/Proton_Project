@@ -18,6 +18,7 @@ SERVER_POOL_ENABLED="${SERVER_POOL_ENABLED:-auto}"
 SERVER_MANAGER_SCRIPT="${SERVER_MANAGER_SCRIPT:-/usr/local/bin/proton/proton-server-manager.sh}"
 SERVER_SELECTION_FILE="${SERVER_SELECTION_FILE:-${STATE_DIR}/current-server.env}"
 WG_POOL_DIR="${WG_POOL_DIR:-/etc/wireguard/proton-pool}"
+RECOVERY_LOCK_FILE="${RECOVERY_LOCK_FILE:-${STATE_DIR}/recovery.lock}"
 CURRENT_WG_PROFILE="$WG_PROFILE"
 
 log() {
@@ -33,7 +34,7 @@ require_command() {
     fi
 }
 
-for cmd in awk chmod cut grep ip mkdir natpmpc rm systemd-cat timeout; do
+for cmd in awk chmod cut flock grep ip mkdir natpmpc rm systemd-cat timeout; do
     require_command "$cmd"
 done
 
@@ -116,7 +117,20 @@ clear_state() {
     rm -f "$STATE_FILE"
 }
 
-reconnect() {
+with_recovery_lock() {
+    local action="$1"
+    shift
+
+    (
+        flock -n 201 || {
+            log "Recovery lock busy, skipping ${action}"
+            exit 99
+        }
+        "$@"
+    ) 201>"$RECOVERY_LOCK_FILE"
+}
+
+perform_reconnect() {
     log "Recycling WireGuard tunnel..."
     load_selected_server
 
@@ -127,6 +141,19 @@ reconnect() {
     clear_state
     "$WG_UP_SCRIPT"
     sleep 5
+}
+
+reconnect() {
+    if with_recovery_lock "reconnect" perform_reconnect; then
+        return 0
+    fi
+
+    local rc=$?
+    if [[ "$rc" -eq 99 ]]; then
+        return 0
+    fi
+
+    return "$rc"
 }
 
 log "Starting WireGuard port forward loop..."
