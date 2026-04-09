@@ -1,0 +1,52 @@
+name: Lint and Test
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  lint-and-test:
+    name: shfmt, ShellCheck, and BATS
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck shfmt bats
+
+      - name: shfmt check (fail if files need formatting)
+        run: |
+          echo "Checking shell script formatting with shfmt..."
+          files=$(git ls-files '*.sh' || true)
+          if [ -z "$files" ]; then
+            echo "No shell scripts found."
+            exit 0
+          fi
+          echo "$files" | xargs shfmt -l > shfmt.out || true
+          if [ -s shfmt.out ]; then
+            echo "The following files need shfmt formatting:" && cat shfmt.out
+            exit 1
+          fi
+
+      - name: Run ShellCheck
+        run: |
+          echo "Running ShellCheck..."
+          files=$(git ls-files '*.sh' || true)
+          if [ -z "$files" ]; then
+            echo "No shell scripts found."
+            exit 0
+          fi
+          shellcheck -x $files
+
+      - name: Run BATS tests
+        run: |
+          if [ -d tests ]; then
+            echo "Running BATS tests..."
+            bats tests/*.bats || exit 1
+          else
+            echo "No tests directory found; skipping BATS."
+          fi
