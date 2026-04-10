@@ -14,6 +14,11 @@ POLL_INTERVAL="${POLL_INTERVAL:-60}"
 VPN_INTERFACE="${VPN_INTERFACE:-proton}"
 VPN_TABLE="${VPN_TABLE:-51820}"
 RULE_PRIORITY="${RULE_PRIORITY:-110}"
+LAN_IF="${LAN_IF:-}"
+LAN_CIDR="${LAN_CIDR:-}"
+DOCKER_LOCAL_RULE_PRIORITY="${DOCKER_LOCAL_RULE_PRIORITY:-108}"
+DOCKER_LAN_RULE_PRIORITY="${DOCKER_LAN_RULE_PRIORITY:-109}"
+DOCKER_VPN_RULE_PRIORITY="${DOCKER_VPN_RULE_PRIORITY:-$RULE_PRIORITY}"
 LAST_FILE="${LAST_FILE:-/run/proton/docker-network-watcher.last}"
 QBT_SYNC_SCRIPT="${QBT_SYNC_SCRIPT:-$DIR/proton-qbittorrent-sync-safe.sh}"
 QBITTORRENT_ENV_FILE="${QBITTORRENT_ENV_FILE:-/etc/proton/qbittorrent.env}"
@@ -38,6 +43,20 @@ load_selected_server() {
 		# shellcheck disable=SC1090
 		source "$SERVER_SELECTION_FILE"
 		VPN_INTERFACE="${SELECTED_VPN_INTERFACE:-$VPN_INTERFACE}"
+	fi
+}
+
+detect_lan_cidr() {
+	if [[ -n "$LAN_CIDR" ]]; then
+		return 0
+	fi
+
+	if [[ -z "$LAN_IF" ]]; then
+		LAN_IF="$(ip route | awk '/default/ {print $5; exit}')"
+	fi
+
+	if [[ -n "$LAN_IF" ]]; then
+		LAN_CIDR="$(ip -4 route show dev "$LAN_IF" | awk '$1 ~ /^[0-9]/ && $1 != "default" {print $1; exit}')"
 	fi
 }
 
@@ -90,11 +109,15 @@ find_network_cidr() {
 
 reapply_routes() {
 	local new_cidr="$1"
+	local old_cidr=""
 
 	load_selected_server
-	local old_cidr=""
 	if [[ -f "$LAST_FILE" ]]; then
 		old_cidr="$(cat "$LAST_FILE" 2>/dev/null || true)"
+	fi
+
+	if [[ -n "$old_cidr" || -n "$new_cidr" ]]; then
+		detect_lan_cidr
 	fi
 
 	# Nothing changed
@@ -103,14 +126,21 @@ reapply_routes() {
 	fi
 
 	if [[ -n "$old_cidr" ]]; then
-		log "Removing old docker->VPN rule for $old_cidr"
-		ip rule del from "$old_cidr" lookup "$VPN_TABLE" priority "$RULE_PRIORITY" 2>/dev/null || true
+		log "Removing old Docker policy rules for $old_cidr"
+		ip rule del from "$old_cidr" to "$old_cidr" lookup main priority "$DOCKER_LOCAL_RULE_PRIORITY" 2>/dev/null || true
+		if [[ -n "$LAN_CIDR" ]]; then
+			ip rule del from "$old_cidr" to "$LAN_CIDR" lookup main priority "$DOCKER_LAN_RULE_PRIORITY" 2>/dev/null || true
+		fi
+		ip rule del from "$old_cidr" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY" 2>/dev/null || true
 	fi
 
 	if [[ -n "$new_cidr" ]]; then
-		log "Applying docker->VPN routing: $new_cidr -> table $VPN_TABLE via $VPN_INTERFACE"
-		ip rule add from "$new_cidr" lookup "$VPN_TABLE" priority "$RULE_PRIORITY" 2>/dev/null || true
-		ip route replace "$new_cidr" dev "$VPN_INTERFACE" table "$VPN_TABLE" 2>/dev/null || true
+		log "Applying Docker policy routing: $new_cidr -> table $VPN_TABLE via $VPN_INTERFACE while keeping local Docker/LAN traffic on main"
+		ip rule add from "$new_cidr" to "$new_cidr" lookup main priority "$DOCKER_LOCAL_RULE_PRIORITY" 2>/dev/null || true
+		if [[ -n "$LAN_CIDR" ]]; then
+			ip rule add from "$new_cidr" to "$LAN_CIDR" lookup main priority "$DOCKER_LAN_RULE_PRIORITY" 2>/dev/null || true
+		fi
+		ip rule add from "$new_cidr" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY" 2>/dev/null || true
 	else
 		log "No docker network detected; docker->VPN source rule removed"
 	fi

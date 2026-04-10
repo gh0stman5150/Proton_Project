@@ -196,7 +196,20 @@ prerouting_mark_rules() {
 	for part in ${DOCKER_NETWORK_CIDR//,/ }; do
 		trimmed="$(trim_field "$part")"
 		[[ -n "$trimmed" ]] || continue
+		printf '        ip saddr %s ip daddr %s return\n' "$trimmed" "$trimmed"
+		printf '        ip saddr %s ip daddr %s return\n' "$trimmed" "$LAN_CIDR"
 		printf '        ip saddr %s meta mark set %s\n' "$trimmed" "$VPN_FWMARK_DEC"
+	done
+}
+
+docker_forward_rules() {
+	local part trimmed
+
+	for part in ${DOCKER_NETWORK_CIDR//,/ }; do
+		trimmed="$(trim_field "$part")"
+		[[ -n "$trimmed" ]] || continue
+		printf '        iifname "%s" ip daddr %s accept\n' "$LAN_IF" "$trimmed"
+		printf '        oifname "%s" ip saddr %s ip daddr %s accept\n' "$LAN_IF" "$trimmed" "$LAN_CIDR"
 	done
 }
 
@@ -302,6 +315,10 @@ $(bypass_output_accept_rules)
     chain forward {
         type filter hook forward priority 0; policy accept;
         ct state established,related accept
+        # Forwarded VPN-bound packets may still look LAN-bound here until
+        # the reroute settles, so trust the fwmark before interface checks.
+        meta mark ${VPN_FWMARK_DEC} accept
+$(docker_forward_rules)
         # Allow forwarding that goes out the vpn interface
         oifname "$VPN_IF" accept
         # Allow LAN <-> LAN forwarding

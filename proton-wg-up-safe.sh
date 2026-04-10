@@ -18,6 +18,11 @@ KILLSWITCH_SCRIPT="${KILLSWITCH_SCRIPT:-/usr/local/bin/proton/proton-killswitch-
 VPN_FWMARK="${VPN_FWMARK:-0xca6c}"
 VPN_TABLE="${VPN_TABLE:-51820}"
 DOCKER_NETWORK_CIDR="${DOCKER_NETWORK_CIDR:-}"
+LAN_IF="${LAN_IF:-}"
+LAN_CIDR="${LAN_CIDR:-}"
+DOCKER_LOCAL_RULE_PRIORITY="${DOCKER_LOCAL_RULE_PRIORITY:-108}"
+DOCKER_LAN_RULE_PRIORITY="${DOCKER_LAN_RULE_PRIORITY:-109}"
+DOCKER_VPN_RULE_PRIORITY="${DOCKER_VPN_RULE_PRIORITY:-110}"
 MANAGE_RESOLVED_DNS="${MANAGE_RESOLVED_DNS:-auto}"
 RESOLVED_DNS_ROUTE_DOMAIN="${RESOLVED_DNS_ROUTE_DOMAIN:-~.}"
 PREVIOUS_WG_PROFILE="$WG_PROFILE"
@@ -129,6 +134,20 @@ trim_field() {
 	value="${value#"${value%%[![:space:]]*}"}"
 	value="${value%"${value##*[![:space:]]}"}"
 	printf '%s\n' "$value"
+}
+
+detect_lan_cidr() {
+	if [[ -n "$LAN_CIDR" ]]; then
+		return 0
+	fi
+
+	if [[ -z "$LAN_IF" ]]; then
+		LAN_IF="$(ip route | awk '/default/ {print $5; exit}')"
+	fi
+
+	if [[ -n "$LAN_IF" ]]; then
+		LAN_CIDR="$(ip -4 route show dev "$LAN_IF" | awk '$1 ~ /^[0-9]/ && $1 != "default" {print $1; exit}')"
+	fi
 }
 
 config_dns_servers() {
@@ -326,12 +345,6 @@ inject_routes() {
 			fi
 		fi
 	fi
-	# Remove any stale routes from a previous interface before installing
-	# new ones. On pool failover the old interface is gone but its routes
-	# linger in the main table until explicitly deleted.
-	if [[ -n "$DOCKER_NETWORK_CIDR" ]]; then
-		ip route del "$DOCKER_NETWORK_CIDR" 2>/dev/null || true
-	fi
 	ip route del "$NATPMP_GATEWAY" 2>/dev/null || true
 
 	# Clean stale rules first (avoid duplicates)
@@ -346,14 +359,21 @@ inject_routes() {
 	# endpoint-allow rule and natpmpc to work without fwmark.
 	ip route replace "$NATPMP_GATEWAY" dev "$VPN_INTERFACE" 2>/dev/null || true
 
-	# If Docker network CIDR is provided, use a source-based rule so container-sourced
-	# traffic is forced into the VPN table (more reliable than a simple dev route).
+	# Keep Docker<->Docker and Docker<->LAN traffic on the main table, while
+	# other container-sourced traffic is forced into the VPN table.
 	if [[ -n "$DOCKER_NETWORK_CIDR" ]]; then
-		# remove any previous rule then add a source-rule
-		ip rule del from "$DOCKER_NETWORK_CIDR" lookup "$VPN_TABLE" priority 110 2>/dev/null || true
-		ip rule add from "$DOCKER_NETWORK_CIDR" lookup "$VPN_TABLE" priority 110
-		ip route replace "$DOCKER_NETWORK_CIDR" dev "$VPN_INTERFACE" table "$VPN_TABLE" 2>/dev/null || true
-		log "Docker network $DOCKER_NETWORK_CIDR routed via $VPN_INTERFACE table $VPN_TABLE"
+		detect_lan_cidr
+		ip rule del from "$DOCKER_NETWORK_CIDR" to "$DOCKER_NETWORK_CIDR" lookup main priority "$DOCKER_LOCAL_RULE_PRIORITY" 2>/dev/null || true
+		ip rule add from "$DOCKER_NETWORK_CIDR" to "$DOCKER_NETWORK_CIDR" lookup main priority "$DOCKER_LOCAL_RULE_PRIORITY"
+
+		if [[ -n "$LAN_CIDR" ]]; then
+			ip rule del from "$DOCKER_NETWORK_CIDR" to "$LAN_CIDR" lookup main priority "$DOCKER_LAN_RULE_PRIORITY" 2>/dev/null || true
+			ip rule add from "$DOCKER_NETWORK_CIDR" to "$LAN_CIDR" lookup main priority "$DOCKER_LAN_RULE_PRIORITY"
+		fi
+
+		ip rule del from "$DOCKER_NETWORK_CIDR" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY" 2>/dev/null || true
+		ip rule add from "$DOCKER_NETWORK_CIDR" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY"
+		log "Docker network $DOCKER_NETWORK_CIDR routed via $VPN_INTERFACE table $VPN_TABLE while local Docker/LAN traffic stays on main"
 	fi
 
 	log "Policy routing: fwmark $VPN_FWMARK -> table $VPN_TABLE via $VPN_INTERFACE"

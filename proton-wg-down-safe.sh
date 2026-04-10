@@ -12,6 +12,11 @@ FILTERED_CONFIG_PATH="${WG_RUNTIME_DIR}/${WG_PROFILE}.conf"
 VPN_FWMARK="${VPN_FWMARK:-0xca6c}"
 VPN_TABLE="${VPN_TABLE:-51820}"
 DOCKER_NETWORK_CIDR="${DOCKER_NETWORK_CIDR:-}"
+LAN_IF="${LAN_IF:-}"
+LAN_CIDR="${LAN_CIDR:-}"
+DOCKER_LOCAL_RULE_PRIORITY="${DOCKER_LOCAL_RULE_PRIORITY:-108}"
+DOCKER_LAN_RULE_PRIORITY="${DOCKER_LAN_RULE_PRIORITY:-109}"
+DOCKER_VPN_RULE_PRIORITY="${DOCKER_VPN_RULE_PRIORITY:-110}"
 MANAGE_RESOLVED_DNS="${MANAGE_RESOLVED_DNS:-auto}"
 RESOLVED_DNS_ROUTE_DOMAIN="${RESOLVED_DNS_ROUTE_DOMAIN:-~.}"
 
@@ -63,6 +68,20 @@ teardown_resolved_dns() {
 	resolvectl flush-caches >/dev/null 2>&1 || true
 }
 
+detect_lan_cidr() {
+	if [[ -n "$LAN_CIDR" ]]; then
+		return 0
+	fi
+
+	if [[ -z "$LAN_IF" ]]; then
+		LAN_IF="$(ip route | awk '/default/ {print $5; exit}')"
+	fi
+
+	if [[ -n "$LAN_IF" ]]; then
+		LAN_CIDR="$(ip -4 route show dev "$LAN_IF" | awk '$1 ~ /^[0-9]/ && $1 != "default" {print $1; exit}')"
+	fi
+}
+
 for cmd in ip wg-quick; do
 	require_command "$cmd"
 done
@@ -82,7 +101,12 @@ ip rule del not fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100 2>/dev/nul
 ip rule del table main suppress_prefixlength 0 priority 99 2>/dev/null || true
 ip route flush table "$VPN_TABLE" 2>/dev/null || true
 if [[ -n "$DOCKER_NETWORK_CIDR" ]]; then
-	ip rule del from "$DOCKER_NETWORK_CIDR" lookup "$VPN_TABLE" priority 110 2>/dev/null || true
+	detect_lan_cidr
+	ip rule del from "$DOCKER_NETWORK_CIDR" to "$DOCKER_NETWORK_CIDR" lookup main priority "$DOCKER_LOCAL_RULE_PRIORITY" 2>/dev/null || true
+	if [[ -n "$LAN_CIDR" ]]; then
+		ip rule del from "$DOCKER_NETWORK_CIDR" to "$LAN_CIDR" lookup main priority "$DOCKER_LAN_RULE_PRIORITY" 2>/dev/null || true
+	fi
+	ip rule del from "$DOCKER_NETWORK_CIDR" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY" 2>/dev/null || true
 fi
 
 teardown_resolved_dns "$VPN_INTERFACE"
