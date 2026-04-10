@@ -111,6 +111,10 @@ if [[ -n "$DOCKER_NETWORK_CIDR" ]]; then
 		ip rule del from "$DOCKER_NETWORK_CIDR" to "$LAN_CIDR" lookup main priority "$DOCKER_LAN_RULE_PRIORITY" 2>/dev/null || true
 	fi
 	ip rule del from "$DOCKER_NETWORK_CIDR" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY" 2>/dev/null || true
+
+	if command -v iptables >/dev/null 2>&1; then
+		iptables -t raw -D PREROUTING -i "$VPN_INTERFACE" -d "$DOCKER_NETWORK_CIDR" -j ACCEPT 2>/dev/null || true
+	fi
 fi
 
 teardown_resolved_dns "$VPN_INTERFACE"

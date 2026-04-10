@@ -132,6 +132,9 @@ reapply_routes() {
 			ip rule del from "$old_cidr" to "$LAN_CIDR" lookup main priority "$DOCKER_LAN_RULE_PRIORITY" 2>/dev/null || true
 		fi
 		ip rule del from "$old_cidr" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY" 2>/dev/null || true
+		if command -v iptables >/dev/null 2>&1; then
+			iptables -t raw -D PREROUTING -i "$VPN_INTERFACE" -d "$old_cidr" -j ACCEPT 2>/dev/null || true
+		fi
 	fi
 
 	if [[ -n "$new_cidr" ]]; then
@@ -141,6 +144,10 @@ reapply_routes() {
 			ip rule add from "$new_cidr" to "$LAN_CIDR" lookup main priority "$DOCKER_LAN_RULE_PRIORITY" 2>/dev/null || true
 		fi
 		ip rule add from "$new_cidr" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY" 2>/dev/null || true
+		if command -v iptables >/dev/null 2>&1; then
+			iptables -t raw -D PREROUTING -i "$VPN_INTERFACE" -d "$new_cidr" -j ACCEPT 2>/dev/null || true
+			iptables -t raw -I PREROUTING 1 -i "$VPN_INTERFACE" -d "$new_cidr" -j ACCEPT 2>/dev/null || true
+		fi
 	else
 		log "No docker network detected; docker->VPN source rule removed"
 	fi

@@ -144,6 +144,7 @@ bypass_output_rules() {
 
 	# Keep LAN and resolver traffic out of the VPN mark path so local
 	# management access and DNS can stay on the host uplink.
+	printf '        tcp dport 53 return\n'
 	printf '        udp dport 53 return\n'
 
 	if [[ -n "$udp_ports" ]]; then
@@ -161,6 +162,7 @@ bypass_output_accept_rules() {
 		printf '        oifname "%s" tcp dport { %s } accept\n' "$LAN_IF" "$tcp_ports"
 	fi
 
+	printf '        oifname "%s" tcp dport 53 accept\n' "$LAN_IF"
 	printf '        oifname "%s" udp dport 53 accept\n' "$LAN_IF"
 
 	if [[ -n "$udp_ports" ]]; then

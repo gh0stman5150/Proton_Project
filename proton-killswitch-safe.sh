@@ -266,10 +266,14 @@ while IFS= read -r _port; do
 	iptables -A "$OUTPUT_CHAIN" -o "$LAN_IF" -p tcp --dport "$_port" -j ACCEPT
 done < <(printf '%s\n' "$BYPASS_TCP_PORTS" | tr ',' '\n' | awk '{$1=$1; print}')
 
+iptables -A "$OUTPUT_CHAIN" -o "$LAN_IF" -p tcp --dport 53 -j ACCEPT
+
 while IFS= read -r _port; do
 	[[ -n "$_port" ]] || continue
 	iptables -A "$OUTPUT_CHAIN" -o "$LAN_IF" -p udp --dport "$_port" -j ACCEPT
 done < <(printf '%s\n' "$BYPASS_UDP_PORTS" | tr ',' '\n' | awk '{$1=$1; print}')
+
+iptables -A "$OUTPUT_CHAIN" -o "$LAN_IF" -p udp --dport 53 -j ACCEPT
 
 iptables -A "$OUTPUT_CHAIN" -j DROP
 iptables -A "$INPUT_CHAIN" -j DROP

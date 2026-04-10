@@ -152,6 +152,24 @@ detect_lan_cidr() {
 	fi
 }
 
+ensure_docker_raw_return_rule() {
+	if [[ -z "$DOCKER_NETWORK_CIDR" ]]; then
+		return 0
+	fi
+
+	if ! command -v iptables >/dev/null 2>&1; then
+		return 0
+	fi
+
+	# Docker installs raw-table anti-spoof drops for published container IPs.
+	# VPN replies to container-originated traffic can re-enter on the tunnel
+	# interface already destined for the container IP, so allow that path
+	# before Docker's "! -i br-... -j DROP" rules fire.
+	iptables -t raw -D PREROUTING -i "$VPN_INTERFACE" -d "$DOCKER_NETWORK_CIDR" -j ACCEPT 2>/dev/null || true
+	iptables -t raw -I PREROUTING 1 -i "$VPN_INTERFACE" -d "$DOCKER_NETWORK_CIDR" -j ACCEPT
+	log "Allowed VPN return traffic from $VPN_INTERFACE to Docker subnet $DOCKER_NETWORK_CIDR in raw PREROUTING"
+}
+
 uses_nftables_backend() {
 	case "$KILLSWITCH_BACKEND" in
 	nft | nftables)
@@ -408,6 +426,7 @@ inject_routes() {
 
 		ip rule del from "$DOCKER_NETWORK_CIDR" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY" 2>/dev/null || true
 		ip rule add from "$DOCKER_NETWORK_CIDR" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY"
+		ensure_docker_raw_return_rule
 		log "Docker network $DOCKER_NETWORK_CIDR routed via $VPN_INTERFACE table $VPN_TABLE while local Docker/LAN traffic stays on main"
 	fi
 
