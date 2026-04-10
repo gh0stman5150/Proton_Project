@@ -18,6 +18,7 @@ KILLSWITCH_SCRIPT="${KILLSWITCH_SCRIPT:-/usr/local/bin/proton/proton-killswitch-
 VPN_FWMARK="${VPN_FWMARK:-0xca6c}"
 VPN_TABLE="${VPN_TABLE:-51820}"
 DOCKER_NETWORK_CIDR="${DOCKER_NETWORK_CIDR:-}"
+KILLSWITCH_BACKEND="${KILLSWITCH_BACKEND:-auto}"
 LAN_IF="${LAN_IF:-}"
 LAN_CIDR="${LAN_CIDR:-}"
 DOCKER_LOCAL_RULE_PRIORITY="${DOCKER_LOCAL_RULE_PRIORITY:-108}"
@@ -148,6 +149,23 @@ detect_lan_cidr() {
 	if [[ -n "$LAN_IF" ]]; then
 		LAN_CIDR="$(ip -4 route show dev "$LAN_IF" | awk '$1 ~ /^[0-9]/ && $1 != "default" {print $1; exit}')"
 	fi
+}
+
+uses_nftables_backend() {
+	case "$KILLSWITCH_BACKEND" in
+	nft | nftables)
+		return 0
+		;;
+	iptables)
+		return 1
+		;;
+	auto)
+		command -v nft >/dev/null 2>&1
+		;;
+	*)
+		return 1
+		;;
+	esac
 }
 
 config_dns_servers() {
@@ -348,16 +366,28 @@ inject_routes() {
 	ip route del "$NATPMP_GATEWAY" 2>/dev/null || true
 
 	# Clean stale rules first (avoid duplicates)
+	ip rule del fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100 2>/dev/null || true
 	ip rule del not fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100 2>/dev/null || true
-	ip rule del table main suppress_prefixlength 0 2>/dev/null || true
-	ip rule add not fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100
-	ip rule add table main suppress_prefixlength 0 priority 99
+	ip rule del table main suppress_prefixlength 0 priority 99 2>/dev/null || true
+	if uses_nftables_backend; then
+		ip rule add fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100
+	else
+		ip rule add table main suppress_prefixlength 0 priority 99
+		ip rule add not fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100
+	fi
 	ip route replace default dev "$VPN_INTERFACE" table "$VPN_TABLE"
 	# NATPMP gateway must be reachable inside the tunnel table too.
 	ip route replace "$NATPMP_GATEWAY" dev "$VPN_INTERFACE" table "$VPN_TABLE"
 	# Keep the direct host route in the main table for the killswitch
 	# endpoint-allow rule and natpmpc to work without fwmark.
 	ip route replace "$NATPMP_GATEWAY" dev "$VPN_INTERFACE" 2>/dev/null || true
+
+	# When policy routing depends on packet marks, reverse-path validation
+	# must consider those marks or forwarded/container traffic can lose its
+	# return path even while host-originated traffic appears healthy.
+	if command -v sysctl >/dev/null 2>&1; then
+		sysctl -q -w net.ipv4.conf.all.src_valid_mark=1 >/dev/null 2>&1 || true
+	fi
 
 	# Keep Docker<->Docker and Docker<->LAN traffic on the main table, while
 	# other container-sourced traffic is forced into the VPN table.
@@ -376,7 +406,11 @@ inject_routes() {
 		log "Docker network $DOCKER_NETWORK_CIDR routed via $VPN_INTERFACE table $VPN_TABLE while local Docker/LAN traffic stays on main"
 	fi
 
-	log "Policy routing: fwmark $VPN_FWMARK -> table $VPN_TABLE via $VPN_INTERFACE"
+	if uses_nftables_backend; then
+		log "Policy routing: fwmark $VPN_FWMARK -> table $VPN_TABLE via $VPN_INTERFACE"
+	else
+		log "Policy routing: not fwmark $VPN_FWMARK -> table $VPN_TABLE via $VPN_INTERFACE"
+	fi
 }
 
 inject_routes

@@ -168,6 +168,36 @@ bypass_output_accept_rules() {
 	fi
 }
 
+docker_output_return_rules() {
+	local part trimmed
+
+	for part in ${DOCKER_NETWORK_CIDR//,/ }; do
+		trimmed="$(trim_field "$part")"
+		[[ -n "$trimmed" ]] || continue
+		printf '        ip daddr %s return\n' "$trimmed"
+	done
+}
+
+docker_input_rules() {
+	local part trimmed
+
+	for part in ${DOCKER_NETWORK_CIDR//,/ }; do
+		trimmed="$(trim_field "$part")"
+		[[ -n "$trimmed" ]] || continue
+		printf '        ip saddr %s accept\n' "$trimmed"
+	done
+}
+
+docker_output_accept_rules() {
+	local part trimmed
+
+	for part in ${DOCKER_NETWORK_CIDR//,/ }; do
+		trimmed="$(trim_field "$part")"
+		[[ -n "$trimmed" ]] || continue
+		printf '        ip daddr %s accept\n' "$trimmed"
+	done
+}
+
 management_input_rules() {
 	local cidr port trimmed
 
@@ -190,24 +220,13 @@ management_input_rules() {
 	done
 }
 
-prerouting_mark_rules() {
-	local part trimmed
-
-	for part in ${DOCKER_NETWORK_CIDR//,/ }; do
-		trimmed="$(trim_field "$part")"
-		[[ -n "$trimmed" ]] || continue
-		printf '        ip saddr %s ip daddr %s return\n' "$trimmed" "$trimmed"
-		printf '        ip saddr %s ip daddr %s return\n' "$trimmed" "$LAN_CIDR"
-		printf '        ip saddr %s meta mark set %s\n' "$trimmed" "$VPN_FWMARK_DEC"
-	done
-}
-
 docker_forward_rules() {
 	local part trimmed
 
 	for part in ${DOCKER_NETWORK_CIDR//,/ }; do
 		trimmed="$(trim_field "$part")"
 		[[ -n "$trimmed" ]] || continue
+		printf '        iifname "%s" ip daddr %s accept\n' "$VPN_IF" "$trimmed"
 		printf '        iifname "%s" ip daddr %s accept\n' "$LAN_IF" "$trimmed"
 		printf '        oifname "%s" ip saddr %s ip daddr %s accept\n' "$LAN_IF" "$trimmed" "$LAN_CIDR"
 	done
@@ -273,13 +292,10 @@ nft delete table inet proton 2>/dev/null || true
 
 nft -f - <<EOF
 table inet proton {
-    chain prerouting_mangle {
-        type filter hook prerouting priority -150; policy accept;
-$(prerouting_mark_rules)
-    }
     chain output_mangle {
         type route hook output priority -150; policy accept;
         ip daddr ${LAN_CIDR} return
+$(docker_output_return_rules)
         ip daddr ${ENDPOINT_IP} return
         ip daddr ${ENDPOINT_IP} udp dport ${ENDPOINT_PORT} return
 $(bypass_output_rules)
@@ -290,6 +306,7 @@ $(bypass_output_rules)
         type filter hook input priority 0; policy accept;
         iifname "lo" accept
         ct state established,related accept
+$(docker_input_rules)
 $(management_input_rules)
         iifname "$LAN_IF" ip saddr ${LAN_CIDR} accept
         iifname "$LAN_IF" udp sport 67 udp dport 68 accept
@@ -305,6 +322,7 @@ $(management_input_rules)
         # Route-hook marking happens before reroute completes, so
         # marked packets can still look like LAN-bound traffic here.
         meta mark ${VPN_FWMARK_DEC} accept
+$(docker_output_accept_rules)
         oifname "$LAN_IF" ip daddr ${LAN_CIDR} accept
 $(bypass_output_accept_rules)
         oifname "$LAN_IF" udp sport 68 udp dport 67 accept

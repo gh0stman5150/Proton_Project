@@ -12,6 +12,7 @@ FILTERED_CONFIG_PATH="${WG_RUNTIME_DIR}/${WG_PROFILE}.conf"
 VPN_FWMARK="${VPN_FWMARK:-0xca6c}"
 VPN_TABLE="${VPN_TABLE:-51820}"
 DOCKER_NETWORK_CIDR="${DOCKER_NETWORK_CIDR:-}"
+KILLSWITCH_BACKEND="${KILLSWITCH_BACKEND:-auto}"
 LAN_IF="${LAN_IF:-}"
 LAN_CIDR="${LAN_CIDR:-}"
 DOCKER_LOCAL_RULE_PRIORITY="${DOCKER_LOCAL_RULE_PRIORITY:-108}"
@@ -97,6 +98,7 @@ fi
 
 # Remove policy routing before tearing down the interface so the kernel
 # does not briefly try to route fwmark'd packets through a gone interface.
+ip rule del fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100 2>/dev/null || true
 ip rule del not fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100 2>/dev/null || true
 ip rule del table main suppress_prefixlength 0 priority 99 2>/dev/null || true
 ip route flush table "$VPN_TABLE" 2>/dev/null || true

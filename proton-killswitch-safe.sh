@@ -126,6 +126,18 @@ for_each_csv() {
 	IFS="$old_ifs"
 }
 
+allow_docker_input_for_cidr() {
+	local cidr="$1"
+
+	iptables -A "$INPUT_CHAIN" -s "$cidr" -j ACCEPT
+}
+
+allow_docker_output_for_cidr() {
+	local cidr="$1"
+
+	iptables -A "$OUTPUT_CHAIN" -d "$cidr" -j ACCEPT
+}
+
 allow_management_tcp_for_cidr() {
 	local cidr="$1"
 	local port
@@ -231,6 +243,8 @@ iptables -A "$INPUT_CHAIN" -i lo -j ACCEPT
 iptables -A "$OUTPUT_CHAIN" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 iptables -A "$INPUT_CHAIN" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
+for_each_csv "$DOCKER_NETWORK_CIDR" allow_docker_input_for_cidr
+for_each_csv "$DOCKER_NETWORK_CIDR" allow_docker_output_for_cidr
 for_each_csv "$MANAGEMENT_ALLOWED_CIDRS" allow_management_tcp_for_cidr
 for_each_csv "$MANAGEMENT_ALLOWED_CIDRS" allow_management_udp_for_cidr
 
