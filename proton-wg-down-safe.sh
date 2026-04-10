@@ -109,8 +109,8 @@ if [[ -f "$SERVER_SELECTION_FILE" ]]; then
 	FILTERED_CONFIG_PATH="${WG_RUNTIME_DIR}/${WG_PROFILE}.conf"
 fi
 
-# Remove policy routing before tearing down the interface so the kernel
-# does not briefly try to route fwmark'd packets through a gone interface.
+# Remove Docker policy routing before tearing down the interface so
+# forwarded container traffic cannot fall back to stale routes.
 for cidr in ${DOCKER_NETWORK_CIDR//,/ }; do
 	cidr="$(trim_field "$cidr")"
 	[[ -n "$cidr" ]] || continue
@@ -153,3 +153,4 @@ else
 fi
 
 rm -f "$DOCKER_NETWORK_CIDR_STATE_FILE"
+

@@ -430,7 +430,7 @@ configure_resolved_dns "$VPN_INTERFACE" "$DNS_SERVERS_CSV"
 inject_routes() {
 	ip route del "$NATPMP_GATEWAY" 2>/dev/null || true
 
-	# Clean stale rules first (avoid duplicates)
+	# Clean stale rules first (avoid duplicates and remove old host-wide rules).
 	for cidr in ${DOCKER_NETWORK_CIDR//,/ }; do
 		cidr="$(trim_field "$cidr")"
 		[[ -n "$cidr" ]] || continue
@@ -439,32 +439,11 @@ inject_routes() {
 	ip rule del fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100 2>/dev/null || true
 	ip rule del not fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100 2>/dev/null || true
 	ip rule del table main suppress_prefixlength 0 priority 99 2>/dev/null || true
-	if [[ -n "$DOCKER_NETWORK_CIDR" ]]; then
-		for cidr in ${DOCKER_NETWORK_CIDR//,/ }; do
-			cidr="$(trim_field "$cidr")"
-			[[ -n "$cidr" ]] || continue
-			ip rule add to "$cidr" lookup main priority "$DOCKER_DEST_MAIN_RULE_PRIORITY"
-		done
-	fi
-	if uses_nftables_backend; then
-		ip rule add fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100
-	else
-		ip rule add table main suppress_prefixlength 0 priority 99
-		ip rule add not fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100
-	fi
 	ip route replace default dev "$VPN_INTERFACE" table "$VPN_TABLE"
 	# NATPMP gateway must be reachable inside the tunnel table too.
 	ip route replace "$NATPMP_GATEWAY" dev "$VPN_INTERFACE" table "$VPN_TABLE"
-	# Keep the direct host route in the main table for the killswitch
-	# endpoint-allow rule and natpmpc to work without fwmark.
+	# Keep the direct host route in the main table for natpmpc.
 	ip route replace "$NATPMP_GATEWAY" dev "$VPN_INTERFACE" 2>/dev/null || true
-
-	# When policy routing depends on packet marks, reverse-path validation
-	# must consider those marks or forwarded/container traffic can lose its
-	# return path even while host-originated traffic appears healthy.
-	if command -v sysctl >/dev/null 2>&1; then
-		sysctl -q -w net.ipv4.conf.all.src_valid_mark=1 >/dev/null 2>&1 || true
-	fi
 
 	# Keep Docker<->Docker and Docker<->LAN traffic on the main table, while
 	# other container-sourced traffic is forced into the VPN table.
@@ -485,16 +464,12 @@ inject_routes() {
 			ip rule add from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY"
 		done
 		ensure_docker_raw_return_rule
-		log "Docker network $DOCKER_NETWORK_CIDR routed via $VPN_INTERFACE table $VPN_TABLE while local Docker/LAN traffic stays on main"
+		log "Docker policy routing: source $DOCKER_NETWORK_CIDR -> table $VPN_TABLE via $VPN_INTERFACE while LAN traffic stays on main"
+	else
+		log "VPN table $VPN_TABLE prepared on $VPN_INTERFACE without Docker source rules"
 	fi
 
 	ensure_vpn_tcp_mss_clamp_rules
-
-	if uses_nftables_backend; then
-		log "Policy routing: fwmark $VPN_FWMARK -> table $VPN_TABLE via $VPN_INTERFACE"
-	else
-		log "Policy routing: not fwmark $VPN_FWMARK -> table $VPN_TABLE via $VPN_INTERFACE"
-	fi
 }
 
 inject_routes
@@ -509,3 +484,4 @@ if [[ -z "$IP" ]]; then
 fi
 
 log "WireGuard up on $VPN_INTERFACE with IP: $IP"
+

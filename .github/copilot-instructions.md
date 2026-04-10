@@ -1,101 +1,192 @@
-# Copilot Instructions: Proton WireGuard VPN Routing & qBittorrent Port Forwarding
+# Copilot Instructions: Proton WireGuard Routing and qBittorrent Port Forwarding
+
+## Authority
+
+This file is the source of truth for this repository. Follow these requirements even if the current repository state differs.
 
 ## Goal
 
-Implement a stable, secure routing design that forces all traffic through the Proton WireGuard VPN, with the following exceptions:
+Implement and maintain a stable routing design with these rules:
 
-- **SSH (tcp/22)** must bypass the VPN and remain reachable via WAN/LAN
-- **RDP (tcp/3389)** must bypass the VPN
-- Everything else, including all media stack services, must route through the VPN
+1. All Docker hosted application traffic must use the Proton WireGuard VPN
+2. SSH on `tcp/22` must bypass the VPN and remain reachable through WAN and LAN
+3. RDP on `tcp/3389` must bypass the VPN and remain reachable through WAN and LAN
+4. qBittorrent must automatically update its listening port when Proton's forwarded port changes or the VPN reconnects
+5. qBittorrent must never bind or fall back to a non VPN path
 
-Additionally, qBittorrent must automatically update its listening port whenever Proton's forwarded port changes or when the VPN reconnects.
-When the listening port is updated, the qBittorrent container must be taken down and restarted to apply the new port.
+## Environment
 
----
+1. The host is single homed on one Ethernet interface
+2. SSH and RDP run on bare metal
+3. SSH and RDP must bypass the VPN for both inbound and outbound traffic
+4. The kill switch only needs to protect Docker hosted application traffic
+5. Host traffic outside Docker does not need to be blocked by the kill switch
 
-## Stack Services in Scope
+## Required Design
 
-qBittorrent, SABnzbd, Lidarr, Radarr, Sonarr, Whisparr, Bazarr, Prowlarr, Huntarr, Reaparr, Flaresolverr, Autobrr, Plex, Overseerr/Seer
+1. Use host level WireGuard with policy routing
+2. Do not introduce a VPN container, gateway container, or sidecar unless the repo already depends on it and the reason is documented from workspace evidence
+3. Docker hosted application traffic must use WireGuard
+4. Docker hosted application traffic must not leak to WAN if the VPN drops
+5. Preserve intended LAN access for services such as Plex and Overseerr without creating unintended WAN bypass paths
 
----
+## Services in Scope
 
-## What to Inspect First
+qBittorrent, SABnzbd, Lidarr, Radarr, Sonarr, Whisparr, Bazarr, Prowlarr, Huntarr, Reaparr, Flaresolverr, Autobrr, Plex, Overseerr or Seer
 
-Before making any changes, locate and analyze the following:
+## Inspect First
 
-- WireGuard configs: `wg0.conf`, Proton-provided configs, any related scripts and systemd units
-- Firewall rules: iptables or nftables rulesets, routing tables, and policy routing (`ip rule`, `ip route`)
-- Docker Compose files, container networking configs, namespaces, and capabilities
-- Healthchecks, watchdogs, reconnection logic, and any cron or systemd timers
-- qBittorrent port-forward updater scripts, including how they authenticate with Proton
+Before changing anything, inspect:
 
-### Pay Special Attention to `/archive`
+1. WireGuard configs such as `wg0.conf`, Proton configs, related scripts, and systemd units
+2. Firewall rules and determine whether the active control plane is `iptables` or `nftables`
+3. Routing state with `ip rule` and `ip route`
+4. Docker Compose files, Docker networks, published ports, namespaces, and capabilities
+5. Healthchecks, watchdogs, reconnect logic, cron jobs, and systemd timers
+6. qBittorrent port updater scripts, NAT-PMP refresh flow, and any Compose-fed published-port inputs
+7. Host and container DNS configuration
+8. Anything under `/archive`
 
-- Identify what the archived implementation did differently from the current one
-- Explain why it worked initially but became unstable after extended uptime
-- Call out any race conditions, leaking routes, DNS issues, firewall state drift, or reconnect edge cases
+## Archive Requirement
 
----
+Compare the current implementation with `/archive`.
 
-## Key Technical Requirements
+Explain:
 
-### A) Split Tunneling and Policy Routing
+1. What the archived version did differently
+2. Why it worked at first
+3. Why it became unstable over time
 
-- Force the default route for all stack traffic through the WireGuard interface
-- Ensure SSH and RDP bypass the VPN using policy routing (source-based, fwmark-based, or interface-based)
-- Implement a kill-switch to prevent traffic leaks during VPN downtime
-- Handle DNS correctly: prevent DNS leaks and ensure containers resolve reliably
+Look for:
 
-### B) Docker and Service Isolation
+1. Race conditions
+2. Route leaks
+3. DNS leaks
+4. Firewall state drift
+5. Stale policy routing
+6. Reconnect edge cases
+7. Docker and systemd ordering problems
 
-- Ensure VPN-bound containers cannot reach WAN directly
-- Prefer one of the following isolation approaches:
-  - A network namespace or dedicated VPN gateway container
-  - Explicit Docker networks routing through a single egress point
-- Ensure Plex and Overseerr remain accessible from the LAN as intended
+If `/archive` is absent or empty, say so explicitly and proceed without archive-based root-cause claims.
 
-### C) qBittorrent Dynamic Port Handling
+## Network Rules
 
-- Detect Proton forwarded port changes and apply them to qBittorrent automatically
-- Ensure port updates survive container restarts and VPN reconnects
-- Confirm qBittorrent is bound to the VPN interface and cannot fall back to a non-VPN binding
+### Routing
 
----
+1. Force Docker hosted application traffic through WireGuard
+2. Keep SSH and RDP on the normal non VPN route
+3. Keep SSH and RDP on the normal route for both inbound and outbound traffic
+4. Document exactly how traffic is classified and enforced
 
-## Expected Deliverables
+### Kill Switch
 
-When analyzing this repo, produce the following:
+1. Block Docker hosted application traffic from reaching WAN outside the VPN
+2. Do not block unrelated host traffic
+3. SSH and RDP must continue to work during VPN downtime
 
-1. **Repo Summary** — A text-based architecture diagram showing components and traffic flow
+### Docker Isolation
 
-2. **Findings**
-   - Where routing and firewall rules are established
-   - Where leaks or instability can occur
-   - Differences between the current and archived implementation
+1. VPN bound containers must not reach WAN directly
+2. Use explicit Docker networks with host level routing and firewall enforcement
+3. Do not allow mixed or ambiguous egress paths
+4. Note any service using host networking and explain its impact
 
-3. **Root-Cause Hypotheses** for archived instability, with evidence cited from specific files
+## qBittorrent Rules
 
-4. **Concrete Fixes**
-   - Exact commands or config changes
-   - File-by-file recommendations with full paths (e.g., `./scripts/...`, `./archive/...`)
-   - Improved systemd unit, timer, or watchdog suggestions where applicable
+1. Detect Proton forwarded port changes automatically
+2. Update the qBittorrent listening port automatically
+3. Update the Docker Compose value or the file that feeds it
+4. Because the published port mapping cannot change while the container is running, stop and recreate the qBittorrent container after the port value changes
+5. Verify the new port after restart
+6. Confirm qBittorrent is bound only to the intended VPN path
 
-5. **Verification Checklist**
-   - Commands to validate routing: `ip rule`, `ip route`, `wg show`, `tcpdump`
-   - Leak tests covering both DNS and IP
-   - Steps to simulate a VPN drop and reconnect, and confirm the kill-switch activates correctly
+## DNS Rules
 
-6. **Security Notes**
-   - Least privilege principles for capabilities and container permissions
-   - Secrets handling: avoid storing credentials in plaintext
-   - Logging guidance: what to log and what must not be logged
+1. Use `1.1.1.1` as primary upstream DNS
+2. Use `9.9.9.9` as secondary upstream DNS
+3. Inspect host resolver configuration
+4. Inspect container `/etc/resolv.conf`
+5. Inspect Docker embedded DNS behavior
+6. Inspect WireGuard DNS settings
+7. Inspect any `systemd-resolved` integration
+8. All DNS queries from Docker hosted application services must follow the intended VPN path
+9. Docker hosted application DNS must not bypass the kill switch
+10. Verify DNS during normal operation, VPN drops, reconnects, and container restarts
 
----
+## Firewall Rule
 
-## Output Format Requirements
+1. Identify whether the system is using `iptables` or `nftables`
+2. Do not mix them in recommendations unless the repo already depends on both and the interaction is explained clearly
+3. Be explicit about which framework owns kill switch logic, forwarding, NAT, and persistence
 
-- Use headings and bullets throughout
-- Cite exact filenames and paths from the workspace (e.g., `./scripts/update-port.sh`, `./archive/wg0.conf`)
-- Present recommended changes as patch-style snippets or exact lines to add or edit
-- Be explicit about whether rules are `iptables` or `nftables`; do not mix them unless the reasoning is clearly justified
-- Begin every response by listing the key files found before proceeding with analysis
+## Evidence Rule
+
+1. Do not speculate without workspace evidence
+2. Separate confirmed findings from hypotheses
+3. Do not claim root cause without file evidence, command output, or reproducible behavior
+
+## Output Requirements
+
+Begin every response with the key files found.
+
+Then provide:
+
+### 1. Repo Summary
+
+A text based architecture diagram showing components and traffic flow
+
+### 2. Findings
+
+Show:
+
+1. Where routing is defined
+2. Where firewall rules are defined
+3. Where Docker networking is defined
+4. Where qBittorrent port forwarding is handled
+5. Where leaks or instability can occur
+6. How current and archived implementations differ
+
+### 3. Root Cause Hypotheses
+
+List likely causes of archived instability with evidence from exact files
+
+### 4. Concrete Fixes
+
+Provide:
+
+1. Exact commands or config changes
+2. File by file recommendations with full paths
+3. Patch style snippets or exact lines to add, remove, or edit
+4. Any systemd ordering, timer, or watchdog fixes
+
+### 5. Verification Checklist
+
+Include commands and steps to validate:
+
+1. `ip rule`
+2. `ip route`
+3. `wg show`
+4. `tcpdump`
+5. DNS leak prevention
+6. public IP leak prevention
+7. qBittorrent port update behavior
+8. VPN drop handling
+9. VPN reconnect handling
+10. kill switch activation and recovery
+
+### 6. Security Notes
+
+Include:
+
+1. Least privilege for containers
+2. Secrets handling and plaintext credential risks
+3. Logging guidance
+4. Unnecessary privileges, mounts, or network exposure
+
+## Response Style
+
+1. Use headings
+2. Cite exact workspace paths such as `./proton-qbittorrent-sync-safe.sh` and `./archive/<artifact-if-present>`
+3. Present recommended changes as patch style snippets or exact edits
+4. Be explicit about `iptables` versus `nftables`
+5. If required files are missing, say so clearly

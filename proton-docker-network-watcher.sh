@@ -25,6 +25,7 @@ QBITTORRENT_ENV_FILE="${QBITTORRENT_ENV_FILE:-/etc/proton/qbittorrent.env}"
 STATE_DIR="${STATE_DIR:-/run/proton}"
 SERVER_SELECTION_FILE="${SERVER_SELECTION_FILE:-${STATE_DIR}/current-server.env}"
 DOCKER_NETWORK_CIDR_STATE_FILE="${DOCKER_NETWORK_CIDR_STATE_FILE:-${STATE_DIR}/docker-network-cidr}"
+KILLSWITCH_SCRIPT="${KILLSWITCH_SCRIPT:-$DIR/proton-killswitch-dispatch.sh}"
 
 mkdir -p /run/proton
 touch "$LAST_FILE" 2>/dev/null || true
@@ -121,8 +122,13 @@ reapply_routes() {
 		detect_lan_cidr
 	fi
 
-	# Nothing changed
+	# Even when the CIDR is unchanged, refresh the Docker raw-table return rule so
+	# Docker restarts cannot leave container return traffic behind a stale drop.
 	if [[ "$new_cidr" == "$old_cidr" ]]; then
+		if [[ -n "$new_cidr" && -n "$VPN_INTERFACE" ]] && command -v iptables >/dev/null 2>&1; then
+			iptables -t raw -D PREROUTING -i "$VPN_INTERFACE" -d "$new_cidr" -j ACCEPT 2>/dev/null || true
+			iptables -t raw -I PREROUTING 1 -i "$VPN_INTERFACE" -d "$new_cidr" -j ACCEPT 2>/dev/null || true
+		fi
 		return 0
 	fi
 
@@ -162,12 +168,21 @@ reapply_routes() {
 	fi
 }
 
-refresh_qb_dnat() {
+reapply_killswitch() {
+	if [[ -x "$KILLSWITCH_SCRIPT" ]]; then
+		log "Reapplying Docker kill-switch state via $KILLSWITCH_SCRIPT"
+		"$KILLSWITCH_SCRIPT" || log "Warning: kill-switch script exited with non-zero status"
+	else
+		log "Kill-switch script not found at $KILLSWITCH_SCRIPT; skipping firewall reconciliation"
+	fi
+}
+
+refresh_qb_state() {
 	if [[ -x "$QBT_SYNC_SCRIPT" ]]; then
-		log "Refreshing qBittorrent sync/DNAT via $QBT_SYNC_SCRIPT"
+		log "Refreshing qBittorrent state via $QBT_SYNC_SCRIPT"
 		"$QBT_SYNC_SCRIPT" || log "Warning: qB sync script exited with non-zero status"
 	else
-		log "qB sync script not found at $QBT_SYNC_SCRIPT; skipping DNAT refresh"
+		log "qB sync script not found at $QBT_SYNC_SCRIPT; skipping qBittorrent reconciliation"
 	fi
 }
 
@@ -182,7 +197,8 @@ _initial() {
 	local cidr
 	cidr=$(find_network_cidr)
 	reapply_routes "$cidr"
-	refresh_qb_dnat
+	reapply_killswitch
+	refresh_qb_state
 }
 
 _initial
@@ -201,7 +217,8 @@ if command -v docker >/dev/null 2>&1; then
 					sleep "$DEBOUNCE_SECONDS"
 					cidr=$(find_network_cidr)
 					reapply_routes "$cidr"
-					refresh_qb_dnat
+					reapply_killswitch
+					refresh_qb_state
 					;;
 				*)
 					;;
@@ -217,6 +234,8 @@ else
 		sleep "$POLL_INTERVAL"
 		cidr=$(find_network_cidr)
 		reapply_routes "$cidr"
-		refresh_qb_dnat
+		reapply_killswitch
+		refresh_qb_state
 	done
 fi
+

@@ -6,9 +6,9 @@ ENV_FILE="${QBITTORRENT_ENV_FILE:-/etc/proton/qbittorrent.env}"
 STATE_FILE="${STATE_FILE:-/run/proton/proton-port.state}"
 CACHE_FILE="${CACHE_FILE:-/run/proton/qbt-port.cache}"
 DNAT_CLEANUP_SCRIPT="${DNAT_CLEANUP_SCRIPT:-${SCRIPT_DIR}/proton-qbt-dnat-cleanup.sh}"
+QBT_COMMON_SCRIPT="${QBT_COMMON_SCRIPT:-${SCRIPT_DIR}/proton-qbittorrent-common.sh}"
 LOG_TAG="${LOG_TAG:-proton-qbt}"
 CACHE_DIR="${CACHE_FILE%/*}"
-QBT_INTERNAL_PORT="${QBT_INTERNAL_PORT:-6881}"
 
 if [[ "$CACHE_DIR" == "$CACHE_FILE" ]]; then
     CACHE_DIR="."
@@ -27,39 +27,36 @@ require_command() {
     fi
 }
 
-for cmd in awk chmod curl grep mkdir mktemp rm sleep stat systemd-cat tr; do
+for cmd in awk chmod curl mkdir mktemp rm sleep stat systemd-cat tr; do
     require_command "$cmd"
 done
 
-mkdir -p "$CACHE_DIR"
-chmod 700 "$CACHE_DIR"
-
-if [[ -f "$ENV_FILE" ]]; then
-    ENV_MODE="$(stat -c '%a' "$ENV_FILE")"
-    ENV_OWNER="$(stat -c '%u' "$ENV_FILE")"
-
-    if [[ "$ENV_MODE" != "600" ]]; then
-        log "ERROR: $ENV_FILE must have mode 600"
-        exit 1
-    fi
-
-    if [[ "$ENV_OWNER" != "0" ]]; then
-        log "ERROR: $ENV_FILE must be owned by root"
-        exit 1
-    fi
-
-    # shellcheck disable=SC1090
-    source "$ENV_FILE"
-else
-    log "ERROR: Env file not found: $ENV_FILE"
+if [[ ! -f "$QBT_COMMON_SCRIPT" ]]; then
+    log "ERROR: qBittorrent helper script not found: $QBT_COMMON_SCRIPT"
     exit 1
 fi
 
-: "${QBITTORRENT_URL:?Missing QBITTORRENT_URL}"
-: "${QBITTORRENT_USER:?Missing QBITTORRENT_USER}"
-: "${QBITTORRENT_PASS:?Missing QBITTORRENT_PASS}"
+# shellcheck disable=SC1090
+source "$QBT_COMMON_SCRIPT"
+qbt_source_env_file "$ENV_FILE"
 
-QBITTORRENT_URL="${QBITTORRENT_URL%/}"
+QBT_INTERNAL_PORT="${QBT_INTERNAL_PORT:-6881}"
+QBT_PORT_APPLY_MODE="${QBT_PORT_APPLY_MODE:-compose-recreate}"
+QBT_PORT_ENV_FILE="${QBT_PORT_ENV_FILE:-/etc/proton/qbittorrent-port.env}"
+QBT_COMPOSE_PROJECT_DIR="${QBT_COMPOSE_PROJECT_DIR:-}"
+QBT_COMPOSE_SERVICE="${QBT_COMPOSE_SERVICE:-qbittorrent}"
+
+case "$QBT_PORT_APPLY_MODE" in
+compose-recreate | legacy-dnat)
+    ;;
+*)
+    log "ERROR: Unsupported QBT_PORT_APPLY_MODE '$QBT_PORT_APPLY_MODE'"
+    exit 1
+    ;;
+esac
+
+mkdir -p "$CACHE_DIR"
+chmod 700 "$CACHE_DIR"
 
 PORT="$(awk -F= '/^CURRENT_PORT=/ {print $2; exit}' "$STATE_FILE" 2>/dev/null || true)"
 
@@ -84,48 +81,108 @@ cleanup() {
 }
 trap cleanup EXIT
 
-login_qbt() {
-    local login_body
-
-    : > "$COOKIE_JAR"
-    login_body="$(curl -fsS \
-        -c "$COOKIE_JAR" \
-        --data-urlencode "username=$QBITTORRENT_USER" \
-        --data-urlencode "password=$QBITTORRENT_PASS" \
-        "$QBITTORRENT_URL/api/v2/auth/login" || true)"
-
-    if [[ "$login_body" != "Ok." ]]; then
-        log "ERROR: Authentication failed"
-        return 1
-    fi
-}
-
-get_qbt_listen_port() {
-    curl -fsS -b "$COOKIE_JAR" \
-        "$QBITTORRENT_URL/api/v2/app/preferences" \
-        | tr ',{}' '\n' \
-        | awk -F: '/"listen_port"/ {gsub(/[^0-9]/, "", $2); print $2; exit}'
-}
-
 write_cache() {
     umask 077
     echo "$PORT" > "$CACHE_FILE"
 }
 
-wait_for_qbt_webui() {
-    local attempt
-
-    for ((attempt = 1; attempt <= 12; attempt++)); do
-        if curl -fsS --max-time 5 "$QBITTORRENT_URL/api/v2/app/version" >/dev/null 2>&1; then
-            return 0
-        fi
-        sleep 5
-    done
-
-    return 1
+read_published_port() {
+    awk -F= '/^QBT_PUBLISHED_PORT=/ {print $2; exit}' "$QBT_PORT_ENV_FILE" 2>/dev/null || true
 }
 
-restart_qbt_container() {
+write_published_port_value() {
+    local value="$1"
+    local port_dir="${QBT_PORT_ENV_FILE%/*}"
+
+    if [[ "$port_dir" == "$QBT_PORT_ENV_FILE" ]]; then
+        port_dir="."
+    fi
+
+    mkdir -p "$port_dir"
+    umask 077
+    {
+        echo "# Managed by proton-qbittorrent-sync-safe.sh"
+        echo "QBT_PUBLISHED_PORT=$value"
+    } > "$QBT_PORT_ENV_FILE"
+    chmod 600 "$QBT_PORT_ENV_FILE"
+}
+
+write_published_port() {
+    write_published_port_value "$PORT"
+}
+
+disable_random_port() {
+    curl -fsS -b "$COOKIE_JAR" -X POST \
+        --data 'json={"random_port":false}' \
+        "$QBITTORRENT_URL/api/v2/app/setPreferences" >/dev/null
+}
+
+set_qbt_listen_port() {
+    curl -fsS -b "$COOKIE_JAR" -X POST \
+        --data "json={\"listen_port\":$PORT}" \
+        "$QBITTORRENT_URL/api/v2/app/setPreferences" >/dev/null
+}
+
+apply_qbt_listen_port() {
+    local applied_port
+
+    if [[ "$CURRENT_QBT_PORT" == "$PORT" ]]; then
+        return 0
+    fi
+
+    log "Updating qBittorrent listen port -> $PORT"
+    disable_random_port
+    set_qbt_listen_port
+
+    applied_port="$(qbt_get_listen_port "$COOKIE_JAR" || true)"
+    if [[ "$applied_port" != "$PORT" ]]; then
+        log "ERROR: qBittorrent did not apply port $PORT (reported: ${applied_port:-unknown})"
+        exit 1
+    fi
+
+    LISTEN_PORT_CHANGED=1
+}
+
+require_compose_mode_ready() {
+    require_command docker
+
+    if [[ -z "$QBT_COMPOSE_PROJECT_DIR" ]]; then
+        log "ERROR: QBT_COMPOSE_PROJECT_DIR is required in compose-recreate mode"
+        return 1
+    fi
+
+    if [[ ! -d "$QBT_COMPOSE_PROJECT_DIR" ]]; then
+        log "ERROR: Compose project directory not found: $QBT_COMPOSE_PROJECT_DIR"
+        return 1
+    fi
+
+    if [[ -z "$QBT_COMPOSE_SERVICE" ]]; then
+        log "ERROR: QBT_COMPOSE_SERVICE is required in compose-recreate mode"
+        return 1
+    fi
+}
+
+recreate_qbt_service_compose() {
+    log "Recreating Compose service $QBT_COMPOSE_SERVICE in $QBT_COMPOSE_PROJECT_DIR for published port $PORT"
+    docker compose --project-directory "$QBT_COMPOSE_PROJECT_DIR" up -d --force-recreate --no-deps "$QBT_COMPOSE_SERVICE" >/dev/null
+
+    if ! qbt_wait_for_webui 12 5; then
+        log "ERROR: qBittorrent Web UI did not become reachable after recreating $QBT_COMPOSE_SERVICE"
+        return 1
+    fi
+
+    if ! qbt_login "$COOKIE_JAR"; then
+        log "ERROR: Authentication failed after recreating $QBT_COMPOSE_SERVICE"
+        return 1
+    fi
+
+    if [[ "$(qbt_get_listen_port "$COOKIE_JAR" || true)" != "$PORT" ]]; then
+        log "ERROR: qBittorrent reported a different port after recreating $QBT_COMPOSE_SERVICE"
+        return 1
+    fi
+}
+
+restart_qbt_container_legacy() {
     if [[ -z "${QBT_CONTAINER_NAME:-}" ]]; then
         log "WARNING: QBT_CONTAINER_NAME is not set; qBittorrent will use the new port after its next restart"
         return 0
@@ -136,14 +193,17 @@ restart_qbt_container() {
     log "Restarting qBittorrent container $QBT_CONTAINER_NAME to apply listen port $PORT"
     docker restart "$QBT_CONTAINER_NAME" >/dev/null
 
-    if ! wait_for_qbt_webui; then
+    if ! qbt_wait_for_webui 12 5; then
         log "ERROR: qBittorrent Web UI did not become reachable after restarting $QBT_CONTAINER_NAME"
         return 1
     fi
 
-    login_qbt
+    if ! qbt_login "$COOKIE_JAR"; then
+        log "ERROR: Authentication failed after restarting $QBT_CONTAINER_NAME"
+        return 1
+    fi
 
-    if [[ "$(get_qbt_listen_port || true)" != "$PORT" ]]; then
+    if [[ "$(qbt_get_listen_port "$COOKIE_JAR" || true)" != "$PORT" ]]; then
         log "ERROR: qBittorrent reported a different port after restarting $QBT_CONTAINER_NAME"
         return 1
     fi
@@ -189,7 +249,7 @@ dnat_rule_present() {
         | grep -F "${proto} dport ${PORT} dnat to ${CONTAINER_IP}:${QBT_INTERNAL_PORT}" >/dev/null 2>&1
 }
 
-refresh_qbt_dnat() {
+refresh_qbt_dnat_legacy() {
     local network_mode
 
     if [[ -z "${QBT_CONTAINER_NAME:-}" ]]; then
@@ -229,44 +289,58 @@ refresh_qbt_dnat() {
     log "Updated qBittorrent DNAT: public port $PORT -> ${CONTAINER_IP}:${QBT_INTERNAL_PORT}"
 }
 
-login_qbt
+if ! qbt_login "$COOKIE_JAR"; then
+    log "ERROR: Authentication failed"
+    exit 1
+fi
 
-CURRENT_QBT_PORT="$(get_qbt_listen_port || true)"
-PORT_CHANGED=0
+CURRENT_QBT_PORT="$(qbt_get_listen_port "$COOKIE_JAR" || true)"
+CURRENT_PUBLISHED_PORT="$(read_published_port || true)"
+LISTEN_PORT_CHANGED=0
+PUBLISHED_PORT_CHANGED=0
 DNAT_CHANGED=0
 
-if [[ "$CURRENT_QBT_PORT" != "$PORT" ]]; then
-    log "Updating qBittorrent port -> $PORT"
+if [[ -n "$CURRENT_PUBLISHED_PORT" && ! "$CURRENT_PUBLISHED_PORT" =~ ^[0-9]+$ ]]; then
+    log "ERROR: Invalid QBT_PUBLISHED_PORT value in $QBT_PORT_ENV_FILE: $CURRENT_PUBLISHED_PORT"
+    exit 1
+fi
 
-    curl -fsS -b "$COOKIE_JAR" -X POST \
-        --data 'json={"random_port":false}' \
-        "$QBITTORRENT_URL/api/v2/app/setPreferences" >/dev/null
+apply_qbt_listen_port
 
-    curl -fsS -b "$COOKIE_JAR" -X POST \
-        --data "json={\"listen_port\":$PORT}" \
-        "$QBITTORRENT_URL/api/v2/app/setPreferences" >/dev/null
-
-    APPLIED_PORT="$(get_qbt_listen_port || true)"
-
-    if [[ "$APPLIED_PORT" != "$PORT" ]]; then
-        log "ERROR: qBittorrent did not apply port $PORT (reported: ${APPLIED_PORT:-unknown})"
-        exit 1
+case "$QBT_PORT_APPLY_MODE" in
+compose-recreate)
+    if [[ "$CURRENT_PUBLISHED_PORT" != "$PORT" ]]; then
+        require_compose_mode_ready || exit 1
+        log "Updating qBittorrent published port artifact -> $PORT"
+        write_published_port
+        PUBLISHED_PORT_CHANGED=1
+        if ! recreate_qbt_service_compose; then
+            if [[ -n "$CURRENT_PUBLISHED_PORT" ]]; then
+                write_published_port_value "$CURRENT_PUBLISHED_PORT"
+            else
+                rm -f "$QBT_PORT_ENV_FILE"
+            fi
+            exit 1
+        fi
     fi
+    ;;
+legacy-dnat)
+    if (( LISTEN_PORT_CHANGED )); then
+        restart_qbt_container_legacy || exit 1
+    fi
+    refresh_qbt_dnat_legacy || exit 1
+    ;;
+esac
 
-    PORT_CHANGED=1
-fi
-
-if (( PORT_CHANGED )); then
-    restart_qbt_container
-fi
-
-refresh_qbt_dnat
 write_cache
 
-if (( PORT_CHANGED )); then
-    log "qBittorrent updated successfully"
+if (( PUBLISHED_PORT_CHANGED )); then
+    log "qBittorrent updated successfully with Compose recreation"
+elif (( LISTEN_PORT_CHANGED )); then
+    log "qBittorrent listen port corrected without published-port changes"
 elif (( DNAT_CHANGED )); then
-    log "qBittorrent DNAT refreshed successfully"
+    log "qBittorrent legacy DNAT refreshed successfully"
 else
     log "qBittorrent already using port $PORT"
 fi
+
