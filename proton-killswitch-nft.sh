@@ -11,7 +11,23 @@ VPN_FWMARK="${VPN_FWMARK:-0xca6c}"
 VPN_FWMARK_DEC=$((VPN_FWMARK))
 BYPASS_TCP_PORTS="${BYPASS_TCP_PORTS:-22,3389}"
 BYPASS_UDP_PORTS="${BYPASS_UDP_PORTS:-3389}"
-LAN_IF="${LAN_IF:-$(ip route | awk '/default/ {print $5; exit}')}"
+DOCKER_NETWORK_CIDR="${DOCKER_NETWORK_CIDR:-}"
+
+log() {
+	echo "$(date '+%F %T') | $*" | systemd-cat -t proton-killswitch
+}
+
+# Retry LAN_IF detection — on boot the default route may not be present yet
+# when the killswitch runs. Retry for up to 30s before giving up.
+if [[ -z "${LAN_IF:-}" ]]; then
+	for _i in 1 2 3 4 5 6; do
+		LAN_IF="$(ip route | awk '/default/ {print $5; exit}')"
+		[[ -n "$LAN_IF" ]] && break
+		log "Waiting for default route (attempt $_i/6)..."
+		sleep 5
+	done
+fi
+LAN_IF="${LAN_IF:-}"
 LAN_CIDR="${LAN_CIDR:-$(ip -4 route show dev "$LAN_IF" | awk '$1 ~ /^[0-9]/ && $1 != "default" {print $1; exit}')}"
 MANAGEMENT_ALLOWED_CIDRS="${MANAGEMENT_ALLOWED_CIDRS:-$LAN_CIDR}"
 MANAGEMENT_TCP_PORTS="${MANAGEMENT_TCP_PORTS:-22,3389}"
@@ -22,11 +38,6 @@ SERVER_RESELECT_FILE="${SERVER_RESELECT_FILE:-${STATE_DIR}/reselect-server.flag}
 SERVER_POOL_ENABLED="${SERVER_POOL_ENABLED:-auto}"
 SERVER_MANAGER_SCRIPT="${SERVER_MANAGER_SCRIPT:-/usr/local/bin/proton/proton-server-manager.sh}"
 WG_POOL_DIR="${WG_POOL_DIR:-/etc/wireguard/proton-pool}"
-DOCKER_NETWORK_CIDR="${DOCKER_NETWORK_CIDR:-}"
-
-log() {
-	echo "$(date '+%F %T') | $*" | systemd-cat -t proton-killswitch
-}
 
 require_command() {
 	local cmd="$1"

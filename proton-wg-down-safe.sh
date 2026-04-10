@@ -78,7 +78,8 @@ fi
 
 # Remove policy routing before tearing down the interface so the kernel
 # does not briefly try to route fwmark'd packets through a gone interface.
-ip rule del fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100 2>/dev/null || true
+ip rule del not fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100 2>/dev/null || true
+ip rule del table main suppress_prefixlength 0 priority 99 2>/dev/null || true
 ip route flush table "$VPN_TABLE" 2>/dev/null || true
 if [[ -n "$DOCKER_NETWORK_CIDR" ]]; then
 	ip rule del from "$DOCKER_NETWORK_CIDR" lookup "$VPN_TABLE" priority 110 2>/dev/null || true

@@ -335,8 +335,10 @@ inject_routes() {
 	ip route del "$NATPMP_GATEWAY" 2>/dev/null || true
 
 	# Clean stale rules first (avoid duplicates)
-	ip rule del fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100 2>/dev/null || true
-	ip rule add fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100
+	ip rule del not fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100 2>/dev/null || true
+	ip rule del table main suppress_prefixlength 0 2>/dev/null || true
+	ip rule add not fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100
+	ip rule add table main suppress_prefixlength 0 priority 99
 	ip route replace default dev "$VPN_INTERFACE" table "$VPN_TABLE"
 	# NATPMP gateway must be reachable inside the tunnel table too.
 	ip route replace "$NATPMP_GATEWAY" dev "$VPN_INTERFACE" table "$VPN_TABLE"

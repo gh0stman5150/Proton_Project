@@ -9,13 +9,13 @@ StartLimitBurst=5
 [Service]
 Type=oneshot
 EnvironmentFile=-/etc/proton/proton-common.env
-ExecStart=/usr/local/bin/proton/proton-wg-up-safe.sh
-ExecStop=/usr/local/bin/proton/proton-wg-down-safe.sh
+ExecStart=/bin/bash -x /usr/local/bin/proton/proton-wg-up-safe.sh
+ExecStop=/bin/bash -x /usr/local/bin/proton/proton-wg-down-safe.sh
 RemainAfterExit=yes
 TimeoutStartSec=120
 TimeoutStopSec=60
 UMask=0077
-NoNewPrivileges=yes
+NoNewPrivileges=no
 PrivateTmp=yes
 ProtectSystem=full
 ProtectHome=yes
@@ -29,7 +29,8 @@ RestrictSUIDSGID=yes
 SystemCallArchitectures=native
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 ReadWritePaths=/run/proton /etc/wireguard/proton-runtime
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SETPCAP
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_SETPCAP
 
 [Install]
 WantedBy=multi-user.target
