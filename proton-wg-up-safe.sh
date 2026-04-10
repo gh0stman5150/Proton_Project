@@ -24,6 +24,7 @@ LAN_CIDR="${LAN_CIDR:-}"
 DOCKER_LOCAL_RULE_PRIORITY="${DOCKER_LOCAL_RULE_PRIORITY:-108}"
 DOCKER_LAN_RULE_PRIORITY="${DOCKER_LAN_RULE_PRIORITY:-109}"
 DOCKER_VPN_RULE_PRIORITY="${DOCKER_VPN_RULE_PRIORITY:-110}"
+DOCKER_DEST_MAIN_RULE_PRIORITY="${DOCKER_DEST_MAIN_RULE_PRIORITY:-98}"
 MANAGE_RESOLVED_DNS="${MANAGE_RESOLVED_DNS:-auto}"
 RESOLVED_DNS_ROUTE_DOMAIN="${RESOLVED_DNS_ROUTE_DOMAIN:-~.}"
 PREVIOUS_WG_PROFILE="$WG_PROFILE"
@@ -366,9 +367,13 @@ inject_routes() {
 	ip route del "$NATPMP_GATEWAY" 2>/dev/null || true
 
 	# Clean stale rules first (avoid duplicates)
+	ip rule del to "$DOCKER_NETWORK_CIDR" lookup main priority "$DOCKER_DEST_MAIN_RULE_PRIORITY" 2>/dev/null || true
 	ip rule del fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100 2>/dev/null || true
 	ip rule del not fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100 2>/dev/null || true
 	ip rule del table main suppress_prefixlength 0 priority 99 2>/dev/null || true
+	if [[ -n "$DOCKER_NETWORK_CIDR" ]]; then
+		ip rule add to "$DOCKER_NETWORK_CIDR" lookup main priority "$DOCKER_DEST_MAIN_RULE_PRIORITY"
+	fi
 	if uses_nftables_backend; then
 		ip rule add fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100
 	else
