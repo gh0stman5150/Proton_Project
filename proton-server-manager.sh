@@ -22,6 +22,9 @@ SERVER_SWITCH_DEGRADED_LATENCY_MS="${SERVER_SWITCH_DEGRADED_LATENCY_MS:-75}"
 SERVER_POOL_STRICT_LINT="${SERVER_POOL_STRICT_LINT:-on}"
 WG_EXPECTED_DNS="${WG_EXPECTED_DNS:-10.2.0.1}"
 WG_LINT_ALLOW_MISSING_DNS="${WG_LINT_ALLOW_MISSING_DNS:-off}"
+PORT_FORWARD_REQUIRED="${PORT_FORWARD_REQUIRED:-on}"
+PF_CAPABLE_PROFILES_FILE="${PF_CAPABLE_PROFILES_FILE:-/etc/proton/pf-capable-profiles.tsv}"
+PF_INCAPABLE_PROFILES_FILE="${PF_INCAPABLE_PROFILES_FILE:-/etc/proton/pf-incapable-profiles.tsv}"
 
 log() {
     echo "$(date '+%F %T') | $*" | systemd-cat -t "$LOG_TAG"
@@ -65,6 +68,116 @@ ensure_directory() {
     if (( created )) && [[ -n "$mode" ]]; then
         chmod "$mode" "$dir"
     fi
+}
+
+parent_dir() {
+    local path="$1"
+
+    if [[ "$path" == */* ]]; then
+        printf '%s\n' "${path%/*}"
+    else
+        printf '.\n'
+    fi
+}
+
+ensure_parent_directory() {
+    ensure_directory "$(parent_dir "$1")" 700
+}
+
+profile_state_tmp_file() {
+    local file="$1"
+
+    printf '%s/.%s.tmp\n' "$STATE_DIR" "${file##*/}"
+}
+
+port_forward_required() {
+    [[ "$PORT_FORWARD_REQUIRED" =~ ^(1|true|yes|on)$ ]]
+}
+
+profile_in_state_file() {
+    local file="$1"
+    local profile="$2"
+
+    [[ -f "$file" ]] || return 1
+
+    awk -F '\t' -v profile="$profile" '
+        $1 == profile { found = 1 }
+        END { exit found ? 0 : 1 }
+    ' "$file"
+}
+
+profile_state_count() {
+    local file="$1"
+
+    [[ -f "$file" ]] || {
+        echo 0
+        return 0
+    }
+
+    awk 'NF > 0 { count++ } END { print count + 0 }' "$file"
+}
+
+remove_profile_record() {
+    local file="$1"
+    local profile="$2"
+    local tmp_file
+
+    ensure_parent_directory "$file"
+    tmp_file="$(profile_state_tmp_file "$file")"
+
+    awk -F '\t' -v profile="$profile" '$1 != profile { print $0 }' "$file" 2>/dev/null > "$tmp_file" || true
+    mv "$tmp_file" "$file"
+    chmod 600 "$file"
+}
+
+write_profile_record() {
+    local file="$1"
+    local profile="$2"
+    local detail="${3:-}"
+    local note="${4:-}"
+    local tmp_file
+
+    ensure_parent_directory "$file"
+    tmp_file="$(profile_state_tmp_file "$file")"
+
+    awk -F '\t' -v profile="$profile" '$1 != profile { print $0 }' "$file" 2>/dev/null > "$tmp_file" || true
+    {
+        printf '%s\t%s' "$profile" "$(date +%s)"
+        if [[ -n "$detail" ]]; then
+            printf '\t%s' "$detail"
+        fi
+        if [[ -n "$note" ]]; then
+            printf '\t%s' "$note"
+        fi
+        printf '\n'
+    } >> "$tmp_file"
+    mv "$tmp_file" "$file"
+    chmod 600 "$file"
+}
+
+port_forward_allowlist_active() {
+    port_forward_required || return 1
+    [[ "$(profile_state_count "$PF_CAPABLE_PROFILES_FILE")" -gt 0 ]]
+}
+
+profile_passes_port_forward_filter() {
+    local profile="$1"
+
+    if ! port_forward_required; then
+        return 0
+    fi
+
+    if profile_in_state_file "$PF_INCAPABLE_PROFILES_FILE" "$profile"; then
+        log "Skipping $profile because it is marked port-forward incapable"
+        return 1
+    fi
+
+    if port_forward_allowlist_active && ! profile_in_state_file "$PF_CAPABLE_PROFILES_FILE" "$profile"; then
+        log "Skipping $profile because it is not in the port-forward allowlist"
+        return 1
+    fi
+
+    return 0
 }
 
 require_common_tools
@@ -152,6 +265,60 @@ lint_config() {
         log "Skipping $(config_profile "$config") because its DNS does not match WG_EXPECTED_DNS"
         return 1
     fi
+}
+
+mark_profile_capable() {
+    local profile="${1:-}"
+    local port="${2:-}"
+
+    if [[ -z "$profile" ]]; then
+        profile="$(current_profile)"
+    fi
+
+    if [[ -z "$profile" ]]; then
+        log "ERROR: Cannot mark a blank profile port-forward capable"
+        exit 1
+    fi
+
+    remove_profile_record "$PF_INCAPABLE_PROFILES_FILE" "$profile"
+    write_profile_record "$PF_CAPABLE_PROFILES_FILE" "$profile" "${port:-unknown}"
+    log "Marked server $profile port-forward capable${port:+ on port $port}"
+}
+
+mark_profile_incapable() {
+    local profile="${1:-}"
+    local reason="${2:-manual}"
+
+    if [[ -z "$profile" ]]; then
+        profile="$(current_profile)"
+    fi
+
+    if [[ -z "$profile" ]]; then
+        log "ERROR: Cannot mark a blank profile port-forward incapable"
+        exit 1
+    fi
+
+    remove_profile_record "$PF_CAPABLE_PROFILES_FILE" "$profile"
+    write_profile_record "$PF_INCAPABLE_PROFILES_FILE" "$profile" "$reason"
+    : > "$SERVER_RESELECT_FILE"
+    chmod 600 "$SERVER_RESELECT_FILE"
+    log "Marked server $profile port-forward incapable ($reason)"
+}
+
+show_profile_state_file() {
+    local file="$1"
+
+    if [[ -f "$file" ]]; then
+        cat "$file"
+    fi
+}
+
+reset_profile_state_file() {
+    local file="$1"
+    local description="$2"
+
+    rm -f "$file"
+    log "Cleared ${description} state"
 }
 
 resolve_endpoint_ip() {
@@ -256,6 +423,10 @@ select_best_server() {
 
         if [[ "$allow_bad" != "1" ]] && server_is_bad "$profile"; then
             log "Skipping cooling-down server $profile"
+            continue
+        fi
+
+        if ! profile_passes_port_forward_filter "$profile"; then
             continue
         fi
 
@@ -402,8 +573,26 @@ case "${1:-select}" in
     reset-bad)
         reset_bad_servers
         ;;
+    mark-capable)
+        mark_profile_capable "${2:-}" "${3:-}"
+        ;;
+    mark-incapable)
+        mark_profile_incapable "${2:-}" "${3:-manual}"
+        ;;
+    show-capable)
+        show_profile_state_file "$PF_CAPABLE_PROFILES_FILE"
+        ;;
+    show-incapable)
+        show_profile_state_file "$PF_INCAPABLE_PROFILES_FILE"
+        ;;
+    reset-capable)
+        reset_profile_state_file "$PF_CAPABLE_PROFILES_FILE" "port-forward capable"
+        ;;
+    reset-incapable)
+        reset_profile_state_file "$PF_INCAPABLE_PROFILES_FILE" "port-forward incapable"
+        ;;
     *)
-        echo "Usage: $0 {select|current|mark-bad|show-bad|reset-bad}" >&2
+        echo "Usage: $0 {select|current|mark-bad|show-bad|reset-bad|mark-capable|mark-incapable|show-capable|show-incapable|reset-capable|reset-incapable}" >&2
         exit 1
         ;;
 esac

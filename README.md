@@ -86,7 +86,7 @@ The installer copies `proton-qbittorrent.env` to `/etc/proton/qbittorrent.env` a
 Minimum required variables:
 
 ```bash
-QBITTORRENT_URL=http://127.0.0.1:8081
+QBITTORRENT_URL=http://192.168.237.78:8081
 QBITTORRENT_USER=change-me
 QBITTORRENT_PASS=change-me
 ```
@@ -95,7 +95,7 @@ Optional qB orchestration variables:
 
 ```bash
 QBT_PORT_APPLY_MODE=compose-recreate
-QBT_COMPOSE_PROJECT_DIR=
+QBT_COMPOSE_PROJECT_DIR=/opt/qbittorrent
 QBT_COMPOSE_SERVICE=qbittorrent
 QBT_PORT_ENV_FILE=/etc/proton/qbittorrent-port.env
 # Legacy DNAT mode only:
@@ -152,7 +152,7 @@ You can also pass qBittorrent credentials during install:
 ```bash
 cd /path/to/project-bundle
 sudo ./install-proton-systemd.sh \
-  --qb-url http://127.0.0.1:8081 \
+  --qb-url http://192.168.237.78:8081 \
   --qb-user your-user \
   --qb-pass your-pass
 ```
@@ -191,6 +191,8 @@ If `/etc/wireguard/proton-pool` contains one or more `*.conf` files, the active 
 
 The selector stores the active choice in `/run/proton/current-server.env` and tracks cooldowns in `/run/proton/bad-servers.tsv`. It uses hysteresis so the current server is kept unless a replacement is meaningfully better or the current server is degraded.
 
+When `PORT_FORWARD_REQUIRED=on`, the pool also learns which profiles have actually returned a Proton forwarded port. Successful profiles are recorded in `PF_CAPABLE_PROFILES_FILE`, failed profiles can be recorded in `PF_INCAPABLE_PROFILES_FILE`, and once the capable file is non-empty the selector only rotates inside that proven-good set.
+
 By default the selector lints each candidate before selection. It rejects configs that contain `PreUp`, `PostUp`, `PreDown`, `PostDown`, or `SaveConfig`, and it expects `DNS` to match `WG_EXPECTED_DNS` unless `WG_LINT_ALLOW_MISSING_DNS=on`.
 
 Useful knobs:
@@ -205,6 +207,9 @@ Useful knobs:
 8. `SERVER_POOL_STRICT_LINT=on`
 9. `WG_EXPECTED_DNS=10.2.0.1`
 10. `WG_LINT_ALLOW_MISSING_DNS=off`
+11. `PORT_FORWARD_REQUIRED=on`
+12. `PF_CAPABLE_PROFILES_FILE=/etc/proton/pf-capable-profiles.tsv`
+13. `PF_INCAPABLE_PROFILES_FILE=/etc/proton/pf-incapable-profiles.tsv`
 
 Manual helpers:
 
@@ -213,6 +218,12 @@ Manual helpers:
 3. `proton-server-manager.sh mark-bad <profile> <reason>`
 4. `proton-server-manager.sh show-bad`
 5. `proton-server-manager.sh reset-bad`
+6. `proton-server-manager.sh mark-capable <profile> <port>`
+7. `proton-server-manager.sh mark-incapable <profile> <reason>`
+8. `proton-server-manager.sh show-capable`
+9. `proton-server-manager.sh show-incapable`
+10. `proton-server-manager.sh reset-capable`
+11. `proton-server-manager.sh reset-incapable`
 
 Any server rotation logic must preserve the repository routing rules, kill switch behavior, qBittorrent port synchronization, and DNS policy after reconnect.
 
@@ -447,4 +458,3 @@ When evaluating or changing this repository:
 3. Do not claim root cause without file evidence, command output, or reproducible behavior
 4. Be explicit about whether the active firewall control plane is `iptables` or `nftables`
 5. Do not mix `iptables` and `nftables` in recommendations unless the existing repository already depends on both and the interaction is explained clearly
-

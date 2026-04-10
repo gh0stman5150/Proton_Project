@@ -243,6 +243,9 @@ while true; do
         log "Got port: $PORT"
         CURRENT_PORT="$PORT"
         save_state "$PORT" "$IP"
+        if server_pool_requested && [[ -x "$SERVER_MANAGER_SCRIPT" ]]; then
+            "$SERVER_MANAGER_SCRIPT" mark-capable "$CURRENT_WG_PROFILE" "$PORT" >/dev/null 2>&1 || true
+        fi
         if ! "$QBITTORRENT_SYNC_SCRIPT"; then
             log "WARNING: qBittorrent port sync failed"
         fi
@@ -256,6 +259,9 @@ while true; do
         CURRENT_PORT=""
 
         if (( FAILURES >= MAX_FAILURES )); then
+            if server_pool_requested && [[ -x "$SERVER_MANAGER_SCRIPT" ]]; then
+                "$SERVER_MANAGER_SCRIPT" mark-incapable "$CURRENT_WG_PROFILE" "natpmp-timeout" >/dev/null 2>&1 || true
+            fi
             log "Too many failures -> reconnecting tunnel"
             reconnect
             FAILURES=0

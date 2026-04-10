@@ -236,7 +236,12 @@ table inet proton {
     chain forward {
         type filter hook forward priority 0; policy accept;
         ct state established,related accept
-$(render_docker_local_rules)$(render_lan_to_docker_rules)$(render_vpn_to_docker_rules)$(render_docker_to_lan_rules)$(render_docker_to_vpn_rules)$(render_docker_drop_rules)
+$(render_docker_local_rules)
+$(render_lan_to_docker_rules)
+$(render_vpn_to_docker_rules)
+$(render_docker_to_lan_rules)
+$(render_docker_to_vpn_rules)
+$(render_docker_drop_rules)
     }
 }
 EOF

@@ -76,6 +76,8 @@ EOF
   grep -F 'udp dport 53 drop' "$NFT_STDIN"
   grep -F 'tcp dport 53 drop' "$NFT_STDIN"
   grep -F 'oifname "proton" ip saddr 172.18.0.0/16 accept' "$NFT_STDIN"
+  ! grep -F 'accept        iifname' "$NFT_STDIN"
+  ! grep -F 'accept        oifname' "$NFT_STDIN"
   ! grep -F 'meta mark set' "$NFT_STDIN"
   ! grep -F 'dport 53 return' "$NFT_STDIN"
 }
