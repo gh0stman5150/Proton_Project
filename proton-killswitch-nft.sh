@@ -139,17 +139,32 @@ ensure_nat_postrouting_chain() {
 }
 
 ensure_masquerade_rule() {
-	local handles
+    # Ensure interface exists BEFORE touching rules
+    if ! ip link show "$VPN_IF" >/dev/null 2>&1; then
+        log "INFO: VPN interface $VPN_IF not up yet, skipping NAT setup"
+        return 0
+    fi
 
-	handles="$(nft list chain ip proton_nat postrouting -a 2>/dev/null | awk -v vpn_if="$VPN_IF" '''$0 ~ "oifname \\"" vpn_if "\\"" && $0 ~ / masquerade/ {for(i=1;i<=NF;i++) if($i=="handle") print $(i+1)}''')"
-	if [[ -n "$handles" ]]; then
-		while read -r handle; do
-			[[ -n "$handle" ]] || continue
-			nft delete rule ip proton_nat postrouting handle "$handle" 2>/dev/null || true
-		done <<< "$handles"
-	fi
+    local handles=""
+    handles="$(
+        nft -a list chain ip proton_nat postrouting 2>/dev/null | \
+        awk -v vpn_if="$VPN_IF" '
+            $0 ~ ("oifname \"" vpn_if "\"") && /masquerade/ {
+                for (i = 1; i <= NF; i++) {
+                    if ($i == "handle") print $(i+1)
+                }
+            }
+        '
+    )"
 
-	nft add rule ip proton_nat postrouting oifname "$VPN_IF" masquerade comment "proton-wg-snat"
+    if [[ -n "$handles" ]]; then
+        while read -r handle; do
+            [[ -n "$handle" ]] || continue
+            nft delete rule ip proton_nat postrouting handle "$handle" 2>/dev/null || true
+        done <<< "$handles"
+    fi
+
+    nft add rule ip proton_nat postrouting oifname "$VPN_IF" masquerade comment "proton-wg-snat"
 }
 
 bypass_output_rules() {

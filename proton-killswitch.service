@@ -1,22 +1,14 @@
 [Unit]
-Description=Proton Kill Switch
-After=network-online.target docker.service
+Description=Proton WireGuard
+After=network-online.target
 Wants=network-online.target
-Before=proton-wg.service
 
 [Service]
 Type=oneshot
 EnvironmentFile=-/etc/proton/proton-common.env
-ExecStart=/usr/local/bin/proton/proton-killswitch-dispatch.sh
+ExecStart=/usr/local/bin/proton/proton-wg-up-safe.sh
+ExecStop=/usr/local/bin/proton/proton-wg-down-safe.sh
 RemainAfterExit=yes
-Restart=on-failure
-RestartSec=5
-StartLimitIntervalSec=60
-StartLimitBurst=5
-NoNewPrivileges=yes
-PrivateTmp=yes
-ProtectSystem=full
-ProtectHome=yes
 
 [Install]
 WantedBy=multi-user.target
