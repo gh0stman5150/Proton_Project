@@ -142,6 +142,10 @@ bypass_output_rules() {
 		printf '        tcp dport { %s } return\n' "$tcp_ports"
 	fi
 
+	# Keep LAN and resolver traffic out of the VPN mark path so local
+	# management access and DNS can stay on the host uplink.
+	printf '        udp dport 53 return\n'
+
 	if [[ -n "$udp_ports" ]]; then
 		printf '        udp dport { %s } return\n' "$udp_ports"
 	fi
@@ -156,6 +160,8 @@ bypass_output_accept_rules() {
 	if [[ -n "$tcp_ports" ]]; then
 		printf '        oifname "%s" tcp dport { %s } accept\n' "$LAN_IF" "$tcp_ports"
 	fi
+
+	printf '        oifname "%s" udp dport 53 accept\n' "$LAN_IF"
 
 	if [[ -n "$udp_ports" ]]; then
 		printf '        oifname "%s" udp dport { %s } accept\n' "$LAN_IF" "$udp_ports"
@@ -260,6 +266,8 @@ $(prerouting_mark_rules)
     }
     chain output_mangle {
         type route hook output priority -150; policy accept;
+        ip daddr ${LAN_CIDR} return
+        ip daddr ${ENDPOINT_IP} return
         ip daddr ${ENDPOINT_IP} udp dport ${ENDPOINT_PORT} return
 $(bypass_output_rules)
         meta mark set ${VPN_FWMARK_DEC}
@@ -281,6 +289,10 @@ $(management_input_rules)
         type filter hook output priority 0; policy accept;
         oifname "lo" accept
         ct state established,related accept
+        # Route-hook marking happens before reroute completes, so
+        # marked packets can still look like LAN-bound traffic here.
+        meta mark ${VPN_FWMARK_DEC} accept
+        oifname "$LAN_IF" ip daddr ${LAN_CIDR} accept
 $(bypass_output_accept_rules)
         oifname "$LAN_IF" udp sport 68 udp dport 67 accept
         oifname "$LAN_IF" ip daddr ${ENDPOINT_IP} udp dport ${ENDPOINT_PORT} accept
