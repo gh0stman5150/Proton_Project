@@ -1,12 +1,13 @@
 #!/usr/bin/env bats
 
 setup() {
-  TMPBIN="$BATS_TMPDIR/bin"
+  TEST_TMPDIR="${BATS_TEST_TMPDIR:-$BATS_TMPDIR}"
+  TMPBIN="$TEST_TMPDIR/bin"
   mkdir -p "$TMPBIN"
   export PATH="$TMPBIN:$PATH"
-  export IPTABLES_LOG="$BATS_TMPDIR/iptables.log"
-  export NFT_LOG="$BATS_TMPDIR/nft.log"
-  export NFT_STDIN="$BATS_TMPDIR/nft.stdin"
+  export IPTABLES_LOG="$TEST_TMPDIR/iptables.log"
+  export NFT_LOG="$TEST_TMPDIR/nft.log"
+  export NFT_STDIN="$TEST_TMPDIR/nft.stdin"
 
   cat > "$TMPBIN/systemd-cat" <<'EOF'
 #!/usr/bin/env bash

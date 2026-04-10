@@ -1,7 +1,8 @@
 #!/usr/bin/env bats
 
 setup() {
-  TMPBIN="$BATS_TMPDIR/bin"
+  TEST_TMPDIR="${BATS_TEST_TMPDIR:-$BATS_TMPDIR}"
+  TMPBIN="$TEST_TMPDIR/bin"
   mkdir -p "$TMPBIN"
   export PATH="$TMPBIN:$PATH"
 }

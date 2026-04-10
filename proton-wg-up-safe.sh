@@ -52,10 +52,23 @@ for cmd in awk cat chmod cut ip mkdir mktemp mv rm systemd-cat wg-quick; do
 	require_command "$cmd"
 done
 
-mkdir -p "$STATE_DIR"
-chmod 700 "$STATE_DIR"
-mkdir -p "$WG_RUNTIME_DIR"
-chmod 700 "$WG_RUNTIME_DIR"
+ensure_directory() {
+	local dir="$1"
+	local mode="${2:-}"
+	local created=0
+
+	if [[ ! -d "$dir" ]]; then
+		mkdir -p "$dir"
+		created=1
+	fi
+
+	if (( created )) && [[ -n "$mode" ]]; then
+		chmod "$mode" "$dir"
+	fi
+}
+
+ensure_directory "$STATE_DIR" 700
+ensure_directory "$WG_RUNTIME_DIR" 700
 
 server_pool_requested() {
 	case "$SERVER_POOL_ENABLED" in
@@ -484,4 +497,3 @@ if [[ -z "$IP" ]]; then
 fi
 
 log "WireGuard up on $VPN_INTERFACE with IP: $IP"
-

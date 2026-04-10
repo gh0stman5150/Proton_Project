@@ -39,8 +39,22 @@ for cmd in awk chmod cut flock grep ip mkdir natpmpc rm systemd-cat timeout; do
     require_command "$cmd"
 done
 
-mkdir -p "$STATE_DIR"
-chmod 700 "$STATE_DIR"
+ensure_directory() {
+    local dir="$1"
+    local mode="${2:-}"
+    local created=0
+
+    if [[ ! -d "$dir" ]]; then
+        mkdir -p "$dir"
+        created=1
+    fi
+
+    if (( created )) && [[ -n "$mode" ]]; then
+        chmod "$mode" "$dir"
+    fi
+}
+
+ensure_directory "$STATE_DIR" 700
 
 case "$MODE" in
     loop|once)

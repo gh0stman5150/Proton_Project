@@ -31,6 +31,21 @@ for cmd in awk chmod curl mkdir mktemp rm sleep stat systemd-cat tr; do
     require_command "$cmd"
 done
 
+ensure_directory() {
+    local dir="$1"
+    local mode="${2:-}"
+    local created=0
+
+    if [[ ! -d "$dir" ]]; then
+        mkdir -p "$dir"
+        created=1
+    fi
+
+    if (( created )) && [[ -n "$mode" ]]; then
+        chmod "$mode" "$dir"
+    fi
+}
+
 if [[ ! -f "$QBT_COMMON_SCRIPT" ]]; then
     log "ERROR: qBittorrent helper script not found: $QBT_COMMON_SCRIPT"
     exit 1
@@ -55,8 +70,7 @@ compose-recreate | legacy-dnat)
     ;;
 esac
 
-mkdir -p "$CACHE_DIR"
-chmod 700 "$CACHE_DIR"
+ensure_directory "$CACHE_DIR" 700
 
 PORT="$(awk -F= '/^CURRENT_PORT=/ {print $2; exit}' "$STATE_FILE" 2>/dev/null || true)"
 
@@ -98,7 +112,7 @@ write_published_port_value() {
         port_dir="."
     fi
 
-    mkdir -p "$port_dir"
+    ensure_directory "$port_dir" 700
     umask 077
     {
         echo "# Managed by proton-qbittorrent-sync-safe.sh"
@@ -343,4 +357,3 @@ elif (( DNAT_CHANGED )); then
 else
     log "qBittorrent already using port $PORT"
 fi
-

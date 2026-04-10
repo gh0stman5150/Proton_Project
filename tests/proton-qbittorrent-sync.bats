@@ -1,19 +1,20 @@
 #!/usr/bin/env bats
 
 setup() {
-  TMPBIN="$BATS_TMPDIR/bin"
+  TEST_TMPDIR="${BATS_TEST_TMPDIR:-$BATS_TMPDIR}"
+  TMPBIN="$TEST_TMPDIR/bin"
   mkdir -p "$TMPBIN"
   export REAL_STAT="$(command -v stat)"
   export PATH="$TMPBIN:$PATH"
-  export STATE_FILE="$BATS_TMPDIR/proton-port.state"
-  export CACHE_FILE="$BATS_TMPDIR/qbt-port.cache"
-  export ENV_FILE="$BATS_TMPDIR/qbittorrent.env"
-  export PORT_ENV_FILE="$BATS_TMPDIR/qbittorrent-port.env"
-  export CURL_STATE="$BATS_TMPDIR/current-qbt-port"
-  export DOCKER_LOG="$BATS_TMPDIR/docker.log"
-  export NFT_LOG="$BATS_TMPDIR/nft.log"
-  export CURL_LOG="$BATS_TMPDIR/curl.log"
-  export PROJECT_DIR="$BATS_TMPDIR/project"
+  export STATE_FILE="$TEST_TMPDIR/proton-port.state"
+  export CACHE_FILE="$TEST_TMPDIR/qbt-port.cache"
+  export ENV_FILE="$TEST_TMPDIR/qbittorrent.env"
+  export PORT_ENV_FILE="$TEST_TMPDIR/qbittorrent-port.env"
+  export CURL_STATE="$TEST_TMPDIR/current-qbt-port"
+  export DOCKER_LOG="$TEST_TMPDIR/docker.log"
+  export NFT_LOG="$TEST_TMPDIR/nft.log"
+  export CURL_LOG="$TEST_TMPDIR/curl.log"
+  export PROJECT_DIR="$TEST_TMPDIR/project"
   mkdir -p "$PROJECT_DIR"
 
   cat > "$TMPBIN/systemd-cat" <<'EOF'
@@ -48,13 +49,9 @@ case "$*" in
     ;;
   *'/api/v2/app/setPreferences'*)
     for arg in "$@"; do
-      case "$arg" in
-        json=\{"listen_port":*\})
-          port="${arg#json={\"listen_port\":}"
-          port="${port%\}}"
-          printf '%s' "$port" > "$CURL_STATE"
-          ;;
-      esac
+      if [[ "$arg" =~ ^json=\{\"listen_port\":([0-9]+)\}$ ]]; then
+        printf '%s' "${BASH_REMATCH[1]}" > "$CURL_STATE"
+      fi
     done
     ;;
   *'/api/v2/app/version'*)

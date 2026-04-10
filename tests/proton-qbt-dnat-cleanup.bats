@@ -1,17 +1,19 @@
 #!/usr/bin/env bats
 
 setup() {
-  TMPBIN="$BATS_TMPDIR/bin"
+  TEST_TMPDIR="${BATS_TEST_TMPDIR:-$BATS_TMPDIR}"
+  TMPBIN="$TEST_TMPDIR/bin"
   mkdir -p "$TMPBIN"
   export PATH="$TMPBIN:$PATH"
 }
 
 @test "exits non-zero when required command missing" {
+  BASH_BIN="$(command -v bash)"
   OLD_PATH="$PATH"
   # Intentionally override PATH to simulate missing commands
   # shellcheck disable=SC2123
   PATH="/nonexistent"
-  run bash ./proton-qbt-dnat-cleanup.sh
+  run "$BASH_BIN" ./proton-qbt-dnat-cleanup.sh
   [ "$status" -ne 0 ]
   PATH="$OLD_PATH"
 }

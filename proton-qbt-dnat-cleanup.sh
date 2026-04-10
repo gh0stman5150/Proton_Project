@@ -4,7 +4,17 @@ set -euo pipefail
 LOG_TAG="${LOG_TAG:-proton-qbt-dnat}"
 
 log() {
-	echo "$(date '+%F %T') | $*" | systemd-cat -t "$LOG_TAG"
+	local prefix=""
+
+	if command -v date >/dev/null 2>&1; then
+		prefix="$(date '+%F %T') | "
+	fi
+
+	if command -v systemd-cat >/dev/null 2>&1; then
+		printf '%s%s\n' "$prefix" "$*" | systemd-cat -t "$LOG_TAG"
+	else
+		printf '%s%s\n' "$prefix" "$*" >&2
+	fi
 }
 
 require_command() {

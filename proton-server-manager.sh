@@ -52,10 +52,24 @@ require_selection_tools() {
     done
 }
 
+ensure_directory() {
+    local dir="$1"
+    local mode="${2:-}"
+    local created=0
+
+    if [[ ! -d "$dir" ]]; then
+        mkdir -p "$dir"
+        created=1
+    fi
+
+    if (( created )) && [[ -n "$mode" ]]; then
+        chmod "$mode" "$dir"
+    fi
+}
+
 require_common_tools
 
-mkdir -p "$STATE_DIR"
-chmod 700 "$STATE_DIR"
+ensure_directory "$STATE_DIR" 700
 
 candidate_configs() {
     if compgen -G "$WG_POOL_DIR/*.conf" >/dev/null; then
