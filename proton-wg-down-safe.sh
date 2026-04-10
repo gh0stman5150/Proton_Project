@@ -117,6 +117,11 @@ if [[ -n "$DOCKER_NETWORK_CIDR" ]]; then
 	fi
 fi
 
+if command -v iptables >/dev/null 2>&1; then
+	iptables -t mangle -D FORWARD -o "$VPN_INTERFACE" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
+	iptables -t mangle -D FORWARD -i "$VPN_INTERFACE" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
+fi
+
 teardown_resolved_dns "$VPN_INTERFACE"
 
 if [[ -f "$FILTERED_CONFIG_PATH" ]]; then

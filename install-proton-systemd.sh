@@ -11,12 +11,19 @@ FORCE_ENV=0
 QBITTORRENT_URL_VALUE=""
 QBITTORRENT_USER_VALUE=""
 QBITTORRENT_PASS_VALUE=""
+QBT_CONTAINER_NAME_VALUE=""
+QBT_INTERNAL_PORT_VALUE=""
+QBT_NETWORK_NAME_VALUE=""
 
 SERVICES=(
     proton-killswitch.service
     proton-wg.service
     proton-port-forward.service
     proton-healthcheck.service
+)
+
+OPTIONAL_SERVICES=(
+    proton-docker-watch.service
 )
 
 SCRIPTS=(
@@ -28,6 +35,8 @@ SCRIPTS=(
     proton-port-forward-healthcheck.sh
     proton-port-forward-safe.sh
     proton-qbittorrent-sync-safe.sh
+    proton-qbt-dnat-cleanup.sh
+    proton-docker-network-watcher.sh
     proton-server-manager.sh
     proton-wg-up-safe.sh
     proton-wg-down-safe.sh
@@ -52,6 +61,9 @@ Options:
   --qb-url URL        Set QBITTORRENT_URL in /etc/proton/qbittorrent.env
   --qb-user USER      Set QBITTORRENT_USER in /etc/proton/qbittorrent.env
   --qb-pass PASS      Set QBITTORRENT_PASS in /etc/proton/qbittorrent.env
+  --qb-container NAME Set QBT_CONTAINER_NAME in /etc/proton/qbittorrent.env
+  --qb-int-port PORT  Set QBT_INTERNAL_PORT in /etc/proton/qbittorrent.env
+  --qb-network NAME   Set QBT_NETWORK_NAME in /etc/proton/qbittorrent.env
   --force-env         Overwrite env files in /etc/proton instead of writing *.new
   --help              Show this help text
 EOF
@@ -107,6 +119,10 @@ validate_bundle() {
     done
 
     for name in "${SERVICES[@]}"; do
+        ensure_source_file "${SCRIPT_DIR}/${name}"
+    done
+
+    for name in "${OPTIONAL_SERVICES[@]}"; do
         ensure_source_file "${SCRIPT_DIR}/${name}"
     done
 
@@ -253,6 +269,7 @@ install_env_template() {
 
 install_qbittorrent_env() {
     local source_file target_file tmp_file current_url current_user current_pass
+    local current_container current_internal_port current_network
 
     source_file="${SCRIPT_DIR}/proton-qbittorrent.env"
     target_file="${ETC_PROTON_DIR}/qbittorrent.env"
@@ -266,27 +283,41 @@ install_qbittorrent_env() {
         return 0
     fi
 
-    if [[ "$FORCE_ENV" -eq 0 && -z "$QBITTORRENT_URL_VALUE" && -z "$QBITTORRENT_USER_VALUE" && -z "$QBITTORRENT_PASS_VALUE" && -f "${target_file}" ]]; then
-        install -o root -g root -m 0600 \
-            "${source_file}" \
-            "${target_file}.new"
+    if [[ "$FORCE_ENV" -eq 0 \
+        && -z "$QBITTORRENT_URL_VALUE" && -z "$QBITTORRENT_USER_VALUE" && -z "$QBITTORRENT_PASS_VALUE" \
+        && -z "$QBT_CONTAINER_NAME_VALUE" && -z "$QBT_INTERNAL_PORT_VALUE" && -z "$QBT_NETWORK_NAME_VALUE" \
+        && -f "${target_file}" ]]; then
+        install -o root -g root -m 0600 "${source_file}" "${target_file}.new"
         log "Preserved ${target_file}; wrote updated template to ${target_file}.new"
         chown root:root "${target_file}"
         chmod 0600 "${target_file}"
         return 0
     fi
 
-    install -o root -g root -m 0600 \
-        "${source_file}" \
-        "${tmp_file}"
+    install -o root -g root -m 0600 "${source_file}" "${tmp_file}"
 
-    current_url="$(awk -F= '/^QBITTORRENT_URL=/ {print $2; exit}' "${tmp_file}")"
-    current_user="$(awk -F= '/^QBITTORRENT_USER=/ {print $2; exit}' "${tmp_file}")"
-    current_pass="$(awk -F= '/^QBITTORRENT_PASS=/ {print $2; exit}' "${tmp_file}")"
+    if [[ -f "$target_file" ]]; then
+        current_url="$(awk -F= '/^QBITTORRENT_URL=/ {print $2; exit}' "${target_file}")"
+        current_user="$(awk -F= '/^QBITTORRENT_USER=/ {print $2; exit}' "${target_file}")"
+        current_pass="$(awk -F= '/^QBITTORRENT_PASS=/ {print $2; exit}' "${target_file}")"
+        current_container="$(awk -F= '/^QBT_CONTAINER_NAME=/ {print $2; exit}' "${target_file}")"
+        current_internal_port="$(awk -F= '/^QBT_INTERNAL_PORT=/ {print $2; exit}' "${target_file}")"
+        current_network="$(awk -F= '/^QBT_NETWORK_NAME=/ {print $2; exit}' "${target_file}")"
+    else
+        current_url="$(awk -F= '/^QBITTORRENT_URL=/ {print $2; exit}' "${tmp_file}")"
+        current_user="$(awk -F= '/^QBITTORRENT_USER=/ {print $2; exit}' "${tmp_file}")"
+        current_pass="$(awk -F= '/^QBITTORRENT_PASS=/ {print $2; exit}' "${tmp_file}")"
+        current_container="$(awk -F= '/^QBT_CONTAINER_NAME=/ {print $2; exit}' "${tmp_file}")"
+        current_internal_port="$(awk -F= '/^QBT_INTERNAL_PORT=/ {print $2; exit}' "${tmp_file}")"
+        current_network="$(awk -F= '/^QBT_NETWORK_NAME=/ {print $2; exit}' "${tmp_file}")"
+    fi
 
     current_url="${QBITTORRENT_URL_VALUE:-$current_url}"
     current_user="${QBITTORRENT_USER_VALUE:-$current_user}"
     current_pass="${QBITTORRENT_PASS_VALUE:-$current_pass}"
+    current_container="${QBT_CONTAINER_NAME_VALUE:-${current_container:-qbittorrent}}"
+    current_internal_port="${QBT_INTERNAL_PORT_VALUE:-${current_internal_port:-6881}}"
+    current_network="${QBT_NETWORK_NAME_VALUE:-$current_network}"
 
     cat > "${tmp_file}" <<EOF
 # qBittorrent credentials for the host-side Proton services.
@@ -296,14 +327,15 @@ install_qbittorrent_env() {
 QBITTORRENT_URL=${current_url}
 QBITTORRENT_USER=${current_user}
 QBITTORRENT_PASS=${current_pass}
+QBT_CONTAINER_NAME=${current_container}
+QBT_INTERNAL_PORT=${current_internal_port}
+# Optional: Docker network name where qBittorrent runs (used to lookup container IP). If blank, the first network IP will be used.
+QBT_NETWORK_NAME=${current_network}
 EOF
 
-    install -o root -g root -m 0600 \
-        "${tmp_file}" \
-        "${target_file}"
+    install -o root -g root -m 0600 "${tmp_file}" "${target_file}"
     rm -f "${tmp_file}"
 }
-
 enable_and_start_services() {
     systemctl daemon-reload
     systemctl enable "${SERVICES[@]}"
@@ -327,6 +359,18 @@ while [[ $# -gt 0 ]]; do
             ;;
         --qb-pass)
             QBITTORRENT_PASS_VALUE="${2:?Missing value for --qb-pass}"
+            shift 2
+            ;;
+        --qb-container)
+            QBT_CONTAINER_NAME_VALUE="${2:?Missing value for --qb-container}"
+            shift 2
+            ;;
+        --qb-int-port)
+            QBT_INTERNAL_PORT_VALUE="${2:?Missing value for --qb-int-port}"
+            shift 2
+            ;;
+        --qb-network)
+            QBT_NETWORK_NAME_VALUE="${2:?Missing value for --qb-network}"
             shift 2
             ;;
         --force-env)
@@ -364,6 +408,10 @@ for script in "${SCRIPTS[@]}"; do
 done
 
 for service in "${SERVICES[@]}"; do
+    install_service_file "$service"
+done
+
+for service in "${OPTIONAL_SERVICES[@]}"; do
     install_service_file "$service"
 done
 

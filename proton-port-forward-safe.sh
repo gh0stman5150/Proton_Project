@@ -171,8 +171,11 @@ while true; do
         "$QBITTORRENT_SYNC_SCRIPT" || true
         FAILURES=0
     else
-        ((FAILURES++))
+        FAILURES=$((FAILURES + 1))
         log "Port request failed ($FAILURES/$MAX_FAILURES)"
+        if [[ -n "$OUT" ]]; then
+            log "Last NAT-PMP output: ${OUT//$'\n'/; }"
+        fi
         CURRENT_PORT=""
 
         if (( FAILURES >= MAX_FAILURES )); then

@@ -170,6 +170,22 @@ ensure_docker_raw_return_rule() {
 	log "Allowed VPN return traffic from $VPN_INTERFACE to Docker subnet $DOCKER_NETWORK_CIDR in raw PREROUTING"
 }
 
+ensure_vpn_tcp_mss_clamp_rules() {
+	if ! command -v iptables >/dev/null 2>&1; then
+		return 0
+	fi
+
+	# Forwarded TCP sessions over WireGuard can blackhole large segments when
+	# Docker bridges still use a 1500-byte MTU. Clamp MSS in both directions
+	# across the VPN interface so app traffic works even when ICMP ping already
+	# looks healthy.
+	iptables -t mangle -D FORWARD -o "$VPN_INTERFACE" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
+	iptables -t mangle -I FORWARD 1 -o "$VPN_INTERFACE" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+	iptables -t mangle -D FORWARD -i "$VPN_INTERFACE" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
+	iptables -t mangle -I FORWARD 1 -i "$VPN_INTERFACE" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+	log "Clamped TCP MSS for forwarded traffic crossing $VPN_INTERFACE"
+}
+
 uses_nftables_backend() {
 	case "$KILLSWITCH_BACKEND" in
 	nft | nftables)
@@ -429,6 +445,8 @@ inject_routes() {
 		ensure_docker_raw_return_rule
 		log "Docker network $DOCKER_NETWORK_CIDR routed via $VPN_INTERFACE table $VPN_TABLE while local Docker/LAN traffic stays on main"
 	fi
+
+	ensure_vpn_tcp_mss_clamp_rules
 
 	if uses_nftables_backend; then
 		log "Policy routing: fwmark $VPN_FWMARK -> table $VPN_TABLE via $VPN_INTERFACE"

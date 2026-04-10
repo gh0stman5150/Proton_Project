@@ -132,11 +132,33 @@ csv_to_nft_set() {
 	printf '%s\n' "$result"
 }
 
+ensure_nat_postrouting_chain() {
+	nft list table ip proton_nat >/dev/null 2>&1 || nft add table ip proton_nat
+	nft list chain ip proton_nat postrouting >/dev/null 2>&1 || \
+		nft 'add chain ip proton_nat postrouting { type nat hook postrouting priority srcnat; policy accept; }'
+}
+
+ensure_masquerade_rule() {
+	local handles
+
+	handles="$(nft list chain ip proton_nat postrouting -a 2>/dev/null | awk -v vpn_if="$VPN_IF" '''$0 ~ "oifname \\"" vpn_if "\\"" && $0 ~ / masquerade/ {for(i=1;i<=NF;i++) if($i=="handle") print $(i+1)}''')"
+	if [[ -n "$handles" ]]; then
+		while read -r handle; do
+			[[ -n "$handle" ]] || continue
+			nft delete rule ip proton_nat postrouting handle "$handle" 2>/dev/null || true
+		done <<< "$handles"
+	fi
+
+	nft add rule ip proton_nat postrouting oifname "$VPN_IF" masquerade comment "proton-wg-snat"
+}
+
 bypass_output_rules() {
 	local tcp_ports udp_ports
 
 	tcp_ports="$(csv_to_nft_set "$BYPASS_TCP_PORTS")"
 	udp_ports="$(csv_to_nft_set "$BYPASS_UDP_PORTS")"
+
+	printf '        ip daddr %s return\n' "$LAN_CIDR"
 
 	if [[ -n "$tcp_ports" ]]; then
 		printf '        tcp dport { %s } return\n' "$tcp_ports"
@@ -291,6 +313,8 @@ require_value "WireGuard endpoint port" "$ENDPOINT_PORT"
 require_value "WireGuard endpoint IP" "$ENDPOINT_IP"
 
 nft delete table inet proton 2>/dev/null || true
+ensure_nat_postrouting_chain
+ensure_masquerade_rule
 
 nft -f - <<EOF
 table inet proton {
@@ -348,4 +372,4 @@ $(docker_forward_rules)
 }
 EOF
 
-log "nftables kill switch applied on $LAN_IF with Proton endpoint ${ENDPOINT_IP}:${ENDPOINT_PORT}; management ports TCP[$MANAGEMENT_TCP_PORTS] UDP[$MANAGEMENT_UDP_PORTS] allowed from [$MANAGEMENT_ALLOWED_CIDRS]; VPN fwmark $VPN_FWMARK (bypass TCP[$BYPASS_TCP_PORTS] UDP[$BYPASS_UDP_PORTS])"
+log "nftables kill switch applied on $LAN_IF with Proton endpoint ${ENDPOINT_IP}:${ENDPOINT_PORT}; management ports TCP[$MANAGEMENT_TCP_PORTS] UDP[$MANAGEMENT_UDP_PORTS] allowed from [$MANAGEMENT_ALLOWED_CIDRS]; VPN fwmark $VPN_FWMARK (bypass TCP[$BYPASS_TCP_PORTS] UDP[$BYPASS_UDP_PORTS]); postrouting masquerade enabled on $VPN_IF"

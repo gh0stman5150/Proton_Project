@@ -10,3 +10,8 @@ iptables -X PROTON_OUTPUT 2>/dev/null || true
 iptables -P OUTPUT ACCEPT
 iptables -P INPUT ACCEPT
 iptables -P FORWARD ACCEPT
+
+nft delete table ip proton_nat 2>/dev/null || true
+iptables -t nat -D POSTROUTING -j PROTON_POSTROUTING 2>/dev/null || true
+iptables -t nat -F PROTON_POSTROUTING 2>/dev/null || true
+iptables -t nat -X PROTON_POSTROUTING 2>/dev/null || true

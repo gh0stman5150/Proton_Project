@@ -9,8 +9,8 @@ StartLimitBurst=5
 [Service]
 Type=oneshot
 EnvironmentFile=-/etc/proton/proton-common.env
-ExecStart=/bin/bash -x /usr/local/bin/proton/proton-wg-up-safe.sh
-ExecStop=/bin/bash -x /usr/local/bin/proton/proton-wg-down-safe.sh
+ExecStart=/usr/local/bin/proton/proton-wg-up-safe.sh
+ExecStop=/usr/local/bin/proton/proton-wg-down-safe.sh
 RemainAfterExit=yes
 TimeoutStartSec=120
 TimeoutStopSec=60

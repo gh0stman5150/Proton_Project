@@ -12,6 +12,7 @@ BYPASS_UDP_PORTS="${BYPASS_UDP_PORTS:-3389}"
 DOCKER_NETWORK_CIDR="${DOCKER_NETWORK_CIDR:-}"
 INPUT_CHAIN="${INPUT_CHAIN:-PROTON_INPUT}"
 OUTPUT_CHAIN="${OUTPUT_CHAIN:-PROTON_OUTPUT}"
+NAT_CHAIN="${NAT_CHAIN:-PROTON_POSTROUTING}"
 STATE_DIR="${STATE_DIR:-/run/proton}"
 SERVER_SELECTION_FILE="${SERVER_SELECTION_FILE:-${STATE_DIR}/current-server.env}"
 SERVER_RESELECT_FILE="${SERVER_RESELECT_FILE:-${STATE_DIR}/reselect-server.flag}"
@@ -231,8 +232,16 @@ ensure_jump_rule() {
 	iptables -I "$parent" 1 -j "$chain"
 }
 
+ensure_nat_chain() {
+	iptables -t nat -N "$NAT_CHAIN" 2>/dev/null || true
+	iptables -t nat -F "$NAT_CHAIN"
+	iptables -t nat -D POSTROUTING -j "$NAT_CHAIN" 2>/dev/null || true
+	iptables -t nat -I POSTROUTING 1 -j "$NAT_CHAIN"
+}
+
 ensure_chain "$INPUT_CHAIN"
 ensure_chain "$OUTPUT_CHAIN"
+ensure_nat_chain
 
 ensure_jump_rule INPUT "$INPUT_CHAIN"
 ensure_jump_rule OUTPUT "$OUTPUT_CHAIN"
@@ -256,6 +265,7 @@ iptables -A "$INPUT_CHAIN" -i "$LAN_IF" -p udp --sport 67 --dport 68 -j ACCEPT
 iptables -A "$OUTPUT_CHAIN" -o "$LAN_IF" -p udp -d "$ENDPOINT_IP" --dport "$ENDPOINT_PORT" -j ACCEPT
 iptables -A "$INPUT_CHAIN" -i "$LAN_IF" -p udp -s "$ENDPOINT_IP" --sport "$ENDPOINT_PORT" -j ACCEPT
 
+iptables -A "$OUTPUT_CHAIN" -o "$LAN_IF" -d "$LAN_CIDR" -j ACCEPT
 iptables -A "$OUTPUT_CHAIN" -o "$VPN_IF" -j ACCEPT
 iptables -A "$INPUT_CHAIN" -i "$VPN_IF" -j ACCEPT
 
@@ -275,7 +285,9 @@ done < <(printf '%s\n' "$BYPASS_UDP_PORTS" | tr ',' '\n' | awk '{$1=$1; print}')
 
 iptables -A "$OUTPUT_CHAIN" -o "$LAN_IF" -p udp --dport 53 -j ACCEPT
 
+iptables -A "$NAT_CHAIN" -o "$VPN_IF" -j MASQUERADE
+
 iptables -A "$OUTPUT_CHAIN" -j DROP
 iptables -A "$INPUT_CHAIN" -j DROP
 
-log "Kill switch chains applied on $LAN_IF with Proton endpoint ${ENDPOINT_IP}:${ENDPOINT_PORT}; management ports TCP[$MANAGEMENT_TCP_PORTS] UDP[$MANAGEMENT_UDP_PORTS] allowed from [$MANAGEMENT_ALLOWED_CIDRS]; bypass TCP[$BYPASS_TCP_PORTS] UDP[$BYPASS_UDP_PORTS] via ISP"
+log "Kill switch chains applied on $LAN_IF with Proton endpoint ${ENDPOINT_IP}:${ENDPOINT_PORT}; management ports TCP[$MANAGEMENT_TCP_PORTS] UDP[$MANAGEMENT_UDP_PORTS] allowed from [$MANAGEMENT_ALLOWED_CIDRS]; bypass TCP[$BYPASS_TCP_PORTS] UDP[$BYPASS_UDP_PORTS] via ISP; postrouting masquerade enabled on $VPN_IF"

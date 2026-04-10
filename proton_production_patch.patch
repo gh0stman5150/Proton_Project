@@ -1,0 +1,409 @@
+--- protonrepo/install-proton-systemd.sh	2026-04-09 20:31:44.000000000 +0000
++++ protonrepo_mod/install-proton-systemd.sh	2026-04-10 05:03:34.445429299 +0000
+@@ -11,6 +11,9 @@
+ QBITTORRENT_URL_VALUE=""
+ QBITTORRENT_USER_VALUE=""
+ QBITTORRENT_PASS_VALUE=""
++QBT_CONTAINER_NAME_VALUE=""
++QBT_INTERNAL_PORT_VALUE=""
++QBT_NETWORK_NAME_VALUE=""
+ 
+ SERVICES=(
+     proton-killswitch.service
+@@ -19,6 +22,10 @@
+     proton-healthcheck.service
+ )
+ 
++OPTIONAL_SERVICES=(
++    proton-docker-watch.service
++)
++
+ SCRIPTS=(
+     install-proton-systemd.sh
+     proton-killswitch-dispatch.sh
+@@ -28,6 +35,8 @@
+     proton-port-forward-healthcheck.sh
+     proton-port-forward-safe.sh
+     proton-qbittorrent-sync-safe.sh
++    proton-qbt-dnat-cleanup.sh
++    proton-docker-network-watcher.sh
+     proton-server-manager.sh
+     proton-wg-up-safe.sh
+     proton-wg-down-safe.sh
+@@ -52,6 +61,9 @@
+   --qb-url URL        Set QBITTORRENT_URL in /etc/proton/qbittorrent.env
+   --qb-user USER      Set QBITTORRENT_USER in /etc/proton/qbittorrent.env
+   --qb-pass PASS      Set QBITTORRENT_PASS in /etc/proton/qbittorrent.env
++  --qb-container NAME Set QBT_CONTAINER_NAME in /etc/proton/qbittorrent.env
++  --qb-int-port PORT  Set QBT_INTERNAL_PORT in /etc/proton/qbittorrent.env
++  --qb-network NAME   Set QBT_NETWORK_NAME in /etc/proton/qbittorrent.env
+   --force-env         Overwrite env files in /etc/proton instead of writing *.new
+   --help              Show this help text
+ EOF
+@@ -110,6 +122,10 @@
+         ensure_source_file "${SCRIPT_DIR}/${name}"
+     done
+ 
++    for name in "${OPTIONAL_SERVICES[@]}"; do
++        ensure_source_file "${SCRIPT_DIR}/${name}"
++    done
++
+     for name in "${ENV_FILES[@]}"; do
+         ensure_source_file "${SCRIPT_DIR}/${name}"
+     done
+@@ -253,6 +269,7 @@
+ 
+ install_qbittorrent_env() {
+     local source_file target_file tmp_file current_url current_user current_pass
++    local current_container current_internal_port current_network
+ 
+     source_file="${SCRIPT_DIR}/proton-qbittorrent.env"
+     target_file="${ETC_PROTON_DIR}/qbittorrent.env"
+@@ -266,27 +283,41 @@
+         return 0
+     fi
+ 
+-    if [[ "$FORCE_ENV" -eq 0 && -z "$QBITTORRENT_URL_VALUE" && -z "$QBITTORRENT_USER_VALUE" && -z "$QBITTORRENT_PASS_VALUE" && -f "${target_file}" ]]; then
+-        install -o root -g root -m 0600 \
+-            "${source_file}" \
+-            "${target_file}.new"
++    if [[ "$FORCE_ENV" -eq 0 \
++        && -z "$QBITTORRENT_URL_VALUE" && -z "$QBITTORRENT_USER_VALUE" && -z "$QBITTORRENT_PASS_VALUE" \
++        && -z "$QBT_CONTAINER_NAME_VALUE" && -z "$QBT_INTERNAL_PORT_VALUE" && -z "$QBT_NETWORK_NAME_VALUE" \
++        && -f "${target_file}" ]]; then
++        install -o root -g root -m 0600 "${source_file}" "${target_file}.new"
+         log "Preserved ${target_file}; wrote updated template to ${target_file}.new"
+         chown root:root "${target_file}"
+         chmod 0600 "${target_file}"
+         return 0
+     fi
+ 
+-    install -o root -g root -m 0600 \
+-        "${source_file}" \
+-        "${tmp_file}"
+-
+-    current_url="$(awk -F= '/^QBITTORRENT_URL=/ {print $2; exit}' "${tmp_file}")"
+-    current_user="$(awk -F= '/^QBITTORRENT_USER=/ {print $2; exit}' "${tmp_file}")"
+-    current_pass="$(awk -F= '/^QBITTORRENT_PASS=/ {print $2; exit}' "${tmp_file}")"
++    install -o root -g root -m 0600 "${source_file}" "${tmp_file}"
++
++    if [[ -f "$target_file" ]]; then
++        current_url="$(awk -F= '/^QBITTORRENT_URL=/ {print $2; exit}' "${target_file}")"
++        current_user="$(awk -F= '/^QBITTORRENT_USER=/ {print $2; exit}' "${target_file}")"
++        current_pass="$(awk -F= '/^QBITTORRENT_PASS=/ {print $2; exit}' "${target_file}")"
++        current_container="$(awk -F= '/^QBT_CONTAINER_NAME=/ {print $2; exit}' "${target_file}")"
++        current_internal_port="$(awk -F= '/^QBT_INTERNAL_PORT=/ {print $2; exit}' "${target_file}")"
++        current_network="$(awk -F= '/^QBT_NETWORK_NAME=/ {print $2; exit}' "${target_file}")"
++    else
++        current_url="$(awk -F= '/^QBITTORRENT_URL=/ {print $2; exit}' "${tmp_file}")"
++        current_user="$(awk -F= '/^QBITTORRENT_USER=/ {print $2; exit}' "${tmp_file}")"
++        current_pass="$(awk -F= '/^QBITTORRENT_PASS=/ {print $2; exit}' "${tmp_file}")"
++        current_container="$(awk -F= '/^QBT_CONTAINER_NAME=/ {print $2; exit}' "${tmp_file}")"
++        current_internal_port="$(awk -F= '/^QBT_INTERNAL_PORT=/ {print $2; exit}' "${tmp_file}")"
++        current_network="$(awk -F= '/^QBT_NETWORK_NAME=/ {print $2; exit}' "${tmp_file}")"
++    fi
+ 
+     current_url="${QBITTORRENT_URL_VALUE:-$current_url}"
+     current_user="${QBITTORRENT_USER_VALUE:-$current_user}"
+     current_pass="${QBITTORRENT_PASS_VALUE:-$current_pass}"
++    current_container="${QBT_CONTAINER_NAME_VALUE:-${current_container:-qbittorrent}}"
++    current_internal_port="${QBT_INTERNAL_PORT_VALUE:-${current_internal_port:-6881}}"
++    current_network="${QBT_NETWORK_NAME_VALUE:-$current_network}"
+ 
+     cat > "${tmp_file}" <<EOF
+ # qBittorrent credentials for the host-side Proton services.
+@@ -296,14 +327,15 @@
+ QBITTORRENT_URL=${current_url}
+ QBITTORRENT_USER=${current_user}
+ QBITTORRENT_PASS=${current_pass}
++QBT_CONTAINER_NAME=${current_container}
++QBT_INTERNAL_PORT=${current_internal_port}
++# Optional: Docker network name where qBittorrent runs (used to lookup container IP). If blank, the first network IP will be used.
++QBT_NETWORK_NAME=${current_network}
+ EOF
+ 
+-    install -o root -g root -m 0600 \
+-        "${tmp_file}" \
+-        "${target_file}"
++    install -o root -g root -m 0600 "${tmp_file}" "${target_file}"
+     rm -f "${tmp_file}"
+ }
+-
+ enable_and_start_services() {
+     systemctl daemon-reload
+     systemctl enable "${SERVICES[@]}"
+@@ -329,6 +361,18 @@
+             QBITTORRENT_PASS_VALUE="${2:?Missing value for --qb-pass}"
+             shift 2
+             ;;
++        --qb-container)
++            QBT_CONTAINER_NAME_VALUE="${2:?Missing value for --qb-container}"
++            shift 2
++            ;;
++        --qb-int-port)
++            QBT_INTERNAL_PORT_VALUE="${2:?Missing value for --qb-int-port}"
++            shift 2
++            ;;
++        --qb-network)
++            QBT_NETWORK_NAME_VALUE="${2:?Missing value for --qb-network}"
++            shift 2
++            ;;
+         --force-env)
+             FORCE_ENV=1
+             shift
+@@ -367,6 +411,10 @@
+     install_service_file "$service"
+ done
+ 
++for service in "${OPTIONAL_SERVICES[@]}"; do
++    install_service_file "$service"
++done
++
+ for env_file in "${ENV_FILES[@]}"; do
+     install_env_template "$env_file" 0644
+ done
+--- protonrepo/proton-killswitch-nft.sh	2026-04-09 22:56:38.000000000 +0000
++++ protonrepo_mod/proton-killswitch-nft.sh	2026-04-10 05:04:23.723501846 +0000
+@@ -132,12 +132,34 @@
+ 	printf '%s\n' "$result"
+ }
+ 
++ensure_nat_postrouting_chain() {
++	nft list table ip proton_nat >/dev/null 2>&1 || nft add table ip proton_nat
++	nft list chain ip proton_nat postrouting >/dev/null 2>&1 || \
++		nft 'add chain ip proton_nat postrouting { type nat hook postrouting priority srcnat; policy accept; }'
++}
++
++ensure_masquerade_rule() {
++	local handles
++
++	handles="$(nft list chain ip proton_nat postrouting -a 2>/dev/null | awk -v vpn_if="$VPN_IF" '''$0 ~ "oifname \\"" vpn_if "\\"" && $0 ~ / masquerade/ {for(i=1;i<=NF;i++) if($i=="handle") print $(i+1)}''')"
++	if [[ -n "$handles" ]]; then
++		while read -r handle; do
++			[[ -n "$handle" ]] || continue
++			nft delete rule ip proton_nat postrouting handle "$handle" 2>/dev/null || true
++		done <<< "$handles"
++	fi
++
++	nft add rule ip proton_nat postrouting oifname "$VPN_IF" masquerade comment "proton-wg-snat"
++}
++
+ bypass_output_rules() {
+ 	local tcp_ports udp_ports
+ 
+ 	tcp_ports="$(csv_to_nft_set "$BYPASS_TCP_PORTS")"
+ 	udp_ports="$(csv_to_nft_set "$BYPASS_UDP_PORTS")"
+ 
++	printf '        ip daddr %s return\n' "$LAN_CIDR"
++
+ 	if [[ -n "$tcp_ports" ]]; then
+ 		printf '        tcp dport { %s } return\n' "$tcp_ports"
+ 	fi
+@@ -291,6 +313,8 @@
+ require_value "WireGuard endpoint IP" "$ENDPOINT_IP"
+ 
+ nft delete table inet proton 2>/dev/null || true
++ensure_nat_postrouting_chain
++ensure_masquerade_rule
+ 
+ nft -f - <<EOF
+ table inet proton {
+@@ -348,4 +372,4 @@
+ }
+ EOF
+ 
+-log "nftables kill switch applied on $LAN_IF with Proton endpoint ${ENDPOINT_IP}:${ENDPOINT_PORT}; management ports TCP[$MANAGEMENT_TCP_PORTS] UDP[$MANAGEMENT_UDP_PORTS] allowed from [$MANAGEMENT_ALLOWED_CIDRS]; VPN fwmark $VPN_FWMARK (bypass TCP[$BYPASS_TCP_PORTS] UDP[$BYPASS_UDP_PORTS])"
++log "nftables kill switch applied on $LAN_IF with Proton endpoint ${ENDPOINT_IP}:${ENDPOINT_PORT}; management ports TCP[$MANAGEMENT_TCP_PORTS] UDP[$MANAGEMENT_UDP_PORTS] allowed from [$MANAGEMENT_ALLOWED_CIDRS]; VPN fwmark $VPN_FWMARK (bypass TCP[$BYPASS_TCP_PORTS] UDP[$BYPASS_UDP_PORTS]); postrouting masquerade enabled on $VPN_IF"
+--- protonrepo/proton-killswitch-reset.sh	2026-04-09 20:24:32.000000000 +0000
++++ protonrepo_mod/proton-killswitch-reset.sh	2026-04-10 05:04:23.724619070 +0000
+@@ -10,3 +10,8 @@
+ iptables -P OUTPUT ACCEPT
+ iptables -P INPUT ACCEPT
+ iptables -P FORWARD ACCEPT
++
++nft delete table ip proton_nat 2>/dev/null || true
++iptables -t nat -D POSTROUTING -j PROTON_POSTROUTING 2>/dev/null || true
++iptables -t nat -F PROTON_POSTROUTING 2>/dev/null || true
++iptables -t nat -X PROTON_POSTROUTING 2>/dev/null || true
+--- protonrepo/proton-killswitch-safe.sh	2026-04-09 22:56:38.000000000 +0000
++++ protonrepo_mod/proton-killswitch-safe.sh	2026-04-10 05:04:23.724201939 +0000
+@@ -12,6 +12,7 @@
+ DOCKER_NETWORK_CIDR="${DOCKER_NETWORK_CIDR:-}"
+ INPUT_CHAIN="${INPUT_CHAIN:-PROTON_INPUT}"
+ OUTPUT_CHAIN="${OUTPUT_CHAIN:-PROTON_OUTPUT}"
++NAT_CHAIN="${NAT_CHAIN:-PROTON_POSTROUTING}"
+ STATE_DIR="${STATE_DIR:-/run/proton}"
+ SERVER_SELECTION_FILE="${SERVER_SELECTION_FILE:-${STATE_DIR}/current-server.env}"
+ SERVER_RESELECT_FILE="${SERVER_RESELECT_FILE:-${STATE_DIR}/reselect-server.flag}"
+@@ -231,8 +232,16 @@
+ 	iptables -I "$parent" 1 -j "$chain"
+ }
+ 
++ensure_nat_chain() {
++	iptables -t nat -N "$NAT_CHAIN" 2>/dev/null || true
++	iptables -t nat -F "$NAT_CHAIN"
++	iptables -t nat -D POSTROUTING -j "$NAT_CHAIN" 2>/dev/null || true
++	iptables -t nat -I POSTROUTING 1 -j "$NAT_CHAIN"
++}
++
+ ensure_chain "$INPUT_CHAIN"
+ ensure_chain "$OUTPUT_CHAIN"
++ensure_nat_chain
+ 
+ ensure_jump_rule INPUT "$INPUT_CHAIN"
+ ensure_jump_rule OUTPUT "$OUTPUT_CHAIN"
+@@ -256,6 +265,7 @@
+ iptables -A "$OUTPUT_CHAIN" -o "$LAN_IF" -p udp -d "$ENDPOINT_IP" --dport "$ENDPOINT_PORT" -j ACCEPT
+ iptables -A "$INPUT_CHAIN" -i "$LAN_IF" -p udp -s "$ENDPOINT_IP" --sport "$ENDPOINT_PORT" -j ACCEPT
+ 
++iptables -A "$OUTPUT_CHAIN" -o "$LAN_IF" -d "$LAN_CIDR" -j ACCEPT
+ iptables -A "$OUTPUT_CHAIN" -o "$VPN_IF" -j ACCEPT
+ iptables -A "$INPUT_CHAIN" -i "$VPN_IF" -j ACCEPT
+ 
+@@ -275,7 +285,9 @@
+ 
+ iptables -A "$OUTPUT_CHAIN" -o "$LAN_IF" -p udp --dport 53 -j ACCEPT
+ 
++iptables -A "$NAT_CHAIN" -o "$VPN_IF" -j MASQUERADE
++
+ iptables -A "$OUTPUT_CHAIN" -j DROP
+ iptables -A "$INPUT_CHAIN" -j DROP
+ 
+-log "Kill switch chains applied on $LAN_IF with Proton endpoint ${ENDPOINT_IP}:${ENDPOINT_PORT}; management ports TCP[$MANAGEMENT_TCP_PORTS] UDP[$MANAGEMENT_UDP_PORTS] allowed from [$MANAGEMENT_ALLOWED_CIDRS]; bypass TCP[$BYPASS_TCP_PORTS] UDP[$BYPASS_UDP_PORTS] via ISP"
++log "Kill switch chains applied on $LAN_IF with Proton endpoint ${ENDPOINT_IP}:${ENDPOINT_PORT}; management ports TCP[$MANAGEMENT_TCP_PORTS] UDP[$MANAGEMENT_UDP_PORTS] allowed from [$MANAGEMENT_ALLOWED_CIDRS]; bypass TCP[$BYPASS_TCP_PORTS] UDP[$BYPASS_UDP_PORTS] via ISP; postrouting masquerade enabled on $VPN_IF"
+--- protonrepo/proton-port-forward-safe.sh	2026-04-09 20:25:14.000000000 +0000
++++ protonrepo_mod/proton-port-forward-safe.sh	2026-04-10 05:02:51.533576602 +0000
+@@ -171,8 +171,11 @@
+         "$QBITTORRENT_SYNC_SCRIPT" || true
+         FAILURES=0
+     else
+-        ((FAILURES++))
++        FAILURES=$((FAILURES + 1))
+         log "Port request failed ($FAILURES/$MAX_FAILURES)"
++        if [[ -n "$OUT" ]]; then
++            log "Last NAT-PMP output: ${OUT//$'\n'/; }"
++        fi
+         CURRENT_PORT=""
+ 
+         if (( FAILURES >= MAX_FAILURES )); then
+--- protonrepo/proton-qbittorrent-sync-safe.sh	2026-04-09 20:25:16.000000000 +0000
++++ protonrepo_mod/proton-qbittorrent-sync-safe.sh	2026-04-10 05:02:51.533930841 +0000
+@@ -6,6 +6,9 @@
+ CACHE_FILE="${CACHE_FILE:-/run/proton/qbt-port.cache}"
+ LOG_TAG="${LOG_TAG:-proton-qbt}"
+ CACHE_DIR="${CACHE_FILE%/*}"
++NFT_TABLE="${NFT_TABLE:-proton_nat}"
++NFT_CHAIN="${NFT_CHAIN:-prerouting}"
++NFT_COMMENT="${NFT_COMMENT:-qbt-dnat}"
+ 
+ if [[ "$CACHE_DIR" == "$CACHE_FILE" ]]; then
+     CACHE_DIR="."
+@@ -57,6 +60,9 @@
+ : "${QBITTORRENT_PASS:?Missing QBITTORRENT_PASS}"
+ 
+ QBITTORRENT_URL="${QBITTORRENT_URL%/}"
++QBT_INTERNAL_PORT="${QBT_INTERNAL_PORT:-6881}"
++QBT_NETWORK_NAME="${QBT_NETWORK_NAME:-}"
++QBT_CONTAINER_NAME="${QBT_CONTAINER_NAME:-}"
+ 
+ PORT="$(awk -F= '/^CURRENT_PORT=/ {print $2; exit}' "$STATE_FILE" 2>/dev/null || true)"
+ 
+@@ -65,9 +71,54 @@
+     exit 0
+ fi
+ 
++
++container_ip() {
++    if [[ -z "$QBT_CONTAINER_NAME" ]] || ! command -v docker >/dev/null 2>&1; then
++        return 0
++    fi
++
++    if [[ -n "$QBT_NETWORK_NAME" ]]; then
++        docker inspect -f "{{with index .NetworkSettings.Networks \"${QBT_NETWORK_NAME}\"}}{{.IPAddress}}{{end}}" "$QBT_CONTAINER_NAME" 2>/dev/null || true
++        return 0
++    fi
++
++    docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{break}}{{end}}' "$QBT_CONTAINER_NAME" 2>/dev/null || true
++}
++
++ensure_dnat_mapping() {
++    local ip="$1"
++    local handles
++
++    [[ -n "$ip" ]] || return 0
++
++    if ! command -v nft >/dev/null 2>&1; then
++        log "nft not available; skipping DNAT refresh"
++        return 0
++    fi
++
++    nft list table ip "$NFT_TABLE" >/dev/null 2>&1 || nft add table ip "$NFT_TABLE"
++    nft list chain ip "$NFT_TABLE" "$NFT_CHAIN" >/dev/null 2>&1 || \
++        nft 'add chain ip '"$NFT_TABLE"' '"$NFT_CHAIN"' { type nat hook prerouting priority dstnat; policy accept; }'
++
++    handles="$(nft list chain ip "$NFT_TABLE" "$NFT_CHAIN" -a 2>/dev/null | awk -v comment="$NFT_COMMENT" '$0 ~ comment {for(i=1;i<=NF;i++) if($i=="handle") print $(i+1)}')"
++    if [[ -n "$handles" ]]; then
++        while read -r handle; do
++            [[ -n "$handle" ]] || continue
++            nft delete rule ip "$NFT_TABLE" "$NFT_CHAIN" handle "$handle" 2>/dev/null || true
++        done <<< "$handles"
++    fi
++
++    nft add rule ip "$NFT_TABLE" "$NFT_CHAIN" tcp dport "$PORT" dnat to "${ip}:${QBT_INTERNAL_PORT}" comment "$NFT_COMMENT"
++    log "DNAT refreshed: tcp dport ${PORT} -> ${ip}:${QBT_INTERNAL_PORT}"
++}
++
+ if [[ -f "$CACHE_FILE" ]]; then
+     LAST_PORT="$(cat "$CACHE_FILE")"
+     if [[ "$PORT" == "$LAST_PORT" ]]; then
++        if [[ -n "$QBT_CONTAINER_NAME" ]]; then
++            IP="$(container_ip)"
++            ensure_dnat_mapping "$IP"
++        fi
+         log "Port unchanged ($PORT), skipping update"
+         exit 0
+     fi
+@@ -90,6 +141,15 @@
+     --data "json={\"listen_port\":$PORT}" \
+     "$QBITTORRENT_URL/api/v2/app/setPreferences" >/dev/null
+ 
++if [[ -n "$QBT_CONTAINER_NAME" ]]; then
++    IP="$(container_ip)"
++    if [[ -n "$IP" ]]; then
++        ensure_dnat_mapping "$IP"
++    else
++        log "WARNING: Could not resolve container IP for ${QBT_CONTAINER_NAME}; skipped DNAT refresh"
++    fi
++fi
++
+ umask 077
+ echo "$PORT" > "$CACHE_FILE"
+ 
+--- protonrepo/proton-qbittorrent.env	2026-04-09 17:16:50.000000000 +0000
++++ protonrepo_mod/proton-qbittorrent.env	2026-04-10 05:02:51.534098886 +0000
+@@ -2,9 +2,9 @@
+ # These scripts run on the host, so point QBITTORRENT_URL at the host-published
+ # Web UI port rather than the Docker-internal starr_network address.
+ 
+-QBITTORRENT_URL=http://192.168.237.78:8081/
+-QBITTORRENT_USER=brianshrum01
+-QBITTORRENT_PASS=R0ckCh@lk5105!
++QBITTORRENT_URL=http://127.0.0.1:8081
++QBITTORRENT_USER=change-me
++QBITTORRENT_PASS=change-me
+ QBT_CONTAINER_NAME=qbittorrent
+ QBT_INTERNAL_PORT=6881
+ # Optional: Docker network name where qBittorrent runs (used to lookup container IP). If blank, the first network IP will be used.
+--- protonrepo/proton-wg.service	2026-04-09 17:40:14.000000000 +0000
++++ protonrepo_mod/proton-wg.service	2026-04-10 05:02:51.534233338 +0000
+@@ -9,8 +9,8 @@
+ [Service]
+ Type=oneshot
+ EnvironmentFile=-/etc/proton/proton-common.env
+-ExecStart=/bin/bash -x /usr/local/bin/proton/proton-wg-up-safe.sh
+-ExecStop=/bin/bash -x /usr/local/bin/proton/proton-wg-down-safe.sh
++ExecStart=/usr/local/bin/proton/proton-wg-up-safe.sh
++ExecStop=/usr/local/bin/proton/proton-wg-down-safe.sh
+ RemainAfterExit=yes
+ TimeoutStartSec=120
+ TimeoutStopSec=60
