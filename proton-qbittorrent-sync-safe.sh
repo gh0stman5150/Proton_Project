@@ -126,28 +126,37 @@ fi
 
 log "Updating qBittorrent port -> $PORT"
 
-AUTH_RESPONSE="$(curl -fsS -i \
+COOKIE_JAR="$(mktemp)"
+trap 'rm -f "$COOKIE_JAR"' EXIT
+
+LOGIN_BODY="$(curl -fsS \
+    -c "$COOKIE_JAR" \
     --data "username=$QBITTORRENT_USER&password=$QBITTORRENT_PASS" \
     "$QBITTORRENT_URL/api/v2/auth/login" || true)"
-COOKIE="$(printf '%s' "$AUTH_RESPONSE" | grep -Fi set-cookie | cut -d' ' -f2 | tr -d '\r')"
 
-if [[ -z "$COOKIE" ]]; then
+if [[ "$LOGIN_BODY" != "Ok." ]]; then
     log "ERROR: Authentication failed"
     exit 1
 fi
 
-curl -fsS --cookie "$COOKIE" \
-    -X POST \
+curl -fsS -b "$COOKIE_JAR" -X POST \
+    --data 'json={"random_port":false}' \
+    "$QBITTORRENT_URL/api/v2/app/setPreferences" >/dev/null
+
+curl -fsS -b "$COOKIE_JAR" -X POST \
     --data "json={\"listen_port\":$PORT}" \
     "$QBITTORRENT_URL/api/v2/app/setPreferences" >/dev/null
 
-if [[ -n "$QBT_CONTAINER_NAME" ]]; then
-    IP="$(container_ip)"
-    if [[ -n "$IP" ]]; then
-        ensure_dnat_mapping "$IP"
-    else
-        log "WARNING: Could not resolve container IP for ${QBT_CONTAINER_NAME}; skipped DNAT refresh"
-    fi
+APPLIED_PORT="$(
+    curl -fsS -b "$COOKIE_JAR" \
+    "$QBITTORRENT_URL/api/v2/app/preferences" \
+    | tr ',{}' '\n' \
+    | awk -F: '/"listen_port"/ {gsub(/[^0-9]/, "", $2); print $2; exit}'
+)"
+
+if [[ "$APPLIED_PORT" != "$PORT" ]]; then
+    log "ERROR: qBittorrent did not apply port $PORT (reported: ${APPLIED_PORT:-unknown})"
+    exit 1
 fi
 
 umask 077

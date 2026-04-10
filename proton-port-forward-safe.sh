@@ -168,7 +168,9 @@ while true; do
         log "Got port: $PORT"
         CURRENT_PORT="$PORT"
         save_state "$PORT" "$IP"
-        "$QBITTORRENT_SYNC_SCRIPT" || true
+        if ! "$QBITTORRENT_SYNC_SCRIPT"; then
+            log "WARNING: qBittorrent port sync failed"
+        fi
         FAILURES=0
     else
         FAILURES=$((FAILURES + 1))
