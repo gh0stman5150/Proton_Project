@@ -379,7 +379,7 @@ resolve_docker_network_cidr() {
 	local candidate=""
 	local subnet=""
 
-	if [[ -z "$DOCKER_NETWORK_CIDR" && command -v docker >/dev/null 2>&1 ]]; then
+	if [[ -z "$DOCKER_NETWORK_CIDR" ]] && command -v docker >/dev/null 2>&1; then
 		candidate=$(docker network ls --format '{{.Name}}' | grep -i starr | head -n1 || true)
 		if [[ -n "$candidate" ]]; then
 			subnet=$(docker network inspect -f '{{range .IPAM.Config}}{{.Subnet}}{{end}}' "$candidate" 2>/dev/null || true)
