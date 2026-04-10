@@ -6,9 +6,6 @@ STATE_FILE="${STATE_FILE:-/run/proton/proton-port.state}"
 CACHE_FILE="${CACHE_FILE:-/run/proton/qbt-port.cache}"
 LOG_TAG="${LOG_TAG:-proton-qbt}"
 CACHE_DIR="${CACHE_FILE%/*}"
-NFT_TABLE="${NFT_TABLE:-proton_nat}"
-NFT_CHAIN="${NFT_CHAIN:-prerouting}"
-NFT_COMMENT="${NFT_COMMENT:-qbt-dnat}"
 
 if [[ "$CACHE_DIR" == "$CACHE_FILE" ]]; then
     CACHE_DIR="."
@@ -27,7 +24,7 @@ require_command() {
     fi
 }
 
-for cmd in awk cat chmod curl cut grep mkdir stat systemd-cat tr; do
+for cmd in awk cat chmod curl grep mkdir mktemp rm sed stat systemd-cat tr; do
     require_command "$cmd"
 done
 
@@ -60,9 +57,6 @@ fi
 : "${QBITTORRENT_PASS:?Missing QBITTORRENT_PASS}"
 
 QBITTORRENT_URL="${QBITTORRENT_URL%/}"
-QBT_INTERNAL_PORT="${QBT_INTERNAL_PORT:-6881}"
-QBT_NETWORK_NAME="${QBT_NETWORK_NAME:-}"
-QBT_CONTAINER_NAME="${QBT_CONTAINER_NAME:-}"
 
 PORT="$(awk -F= '/^CURRENT_PORT=/ {print $2; exit}' "$STATE_FILE" 2>/dev/null || true)"
 
@@ -71,73 +65,45 @@ if [[ -z "$PORT" ]]; then
     exit 0
 fi
 
-
-container_ip() {
-    if [[ -z "$QBT_CONTAINER_NAME" ]] || ! command -v docker >/dev/null 2>&1; then
-        return 0
-    fi
-
-    if [[ -n "$QBT_NETWORK_NAME" ]]; then
-        docker inspect -f "{{with index .NetworkSettings.Networks \"${QBT_NETWORK_NAME}\"}}{{.IPAddress}}{{end}}" "$QBT_CONTAINER_NAME" 2>/dev/null || true
-        return 0
-    fi
-
-    docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{break}}{{end}}' "$QBT_CONTAINER_NAME" 2>/dev/null || true
-}
-
-ensure_dnat_mapping() {
-    local ip="$1"
-    local handles
-
-    [[ -n "$ip" ]] || return 0
-
-    if ! command -v nft >/dev/null 2>&1; then
-        log "nft not available; skipping DNAT refresh"
-        return 0
-    fi
-
-    nft list table ip "$NFT_TABLE" >/dev/null 2>&1 || nft add table ip "$NFT_TABLE"
-    nft list chain ip "$NFT_TABLE" "$NFT_CHAIN" >/dev/null 2>&1 || \
-        nft 'add chain ip '"$NFT_TABLE"' '"$NFT_CHAIN"' { type nat hook prerouting priority dstnat; policy accept; }'
-
-    handles="$(nft list chain ip "$NFT_TABLE" "$NFT_CHAIN" -a 2>/dev/null | awk -v comment="$NFT_COMMENT" '$0 ~ comment {for(i=1;i<=NF;i++) if($i=="handle") print $(i+1)}')"
-    if [[ -n "$handles" ]]; then
-        while read -r handle; do
-            [[ -n "$handle" ]] || continue
-            nft delete rule ip "$NFT_TABLE" "$NFT_CHAIN" handle "$handle" 2>/dev/null || true
-        done <<< "$handles"
-    fi
-
-    nft add rule ip "$NFT_TABLE" "$NFT_CHAIN" tcp dport "$PORT" dnat to "${ip}:${QBT_INTERNAL_PORT}" comment "$NFT_COMMENT"
-    log "DNAT refreshed: tcp dport ${PORT} -> ${ip}:${QBT_INTERNAL_PORT}"
-}
-
-if [[ -f "$CACHE_FILE" ]]; then
-    LAST_PORT="$(cat "$CACHE_FILE")"
-    if [[ "$PORT" == "$LAST_PORT" ]]; then
-        if [[ -n "$QBT_CONTAINER_NAME" ]]; then
-            IP="$(container_ip)"
-            ensure_dnat_mapping "$IP"
-        fi
-        log "Port unchanged ($PORT), skipping update"
-        exit 0
-    fi
+if [[ ! "$PORT" =~ ^[0-9]+$ ]]; then
+    log "ERROR: Invalid port value: $PORT"
+    exit 1
 fi
 
-log "Updating qBittorrent port -> $PORT"
-
 COOKIE_JAR="$(mktemp)"
-trap 'rm -f "$COOKIE_JAR"' EXIT
+cleanup() {
+    rm -f "$COOKIE_JAR"
+}
+trap cleanup EXIT
 
-LOGIN_BODY="$(curl -fsS \
+login_body="$(curl -fsS \
     -c "$COOKIE_JAR" \
-    --data "username=$QBITTORRENT_USER&password=$QBITTORRENT_PASS" \
+    --data-urlencode "username=$QBITTORRENT_USER" \
+    --data-urlencode "password=$QBITTORRENT_PASS" \
     "$QBITTORRENT_URL/api/v2/auth/login" || true)"
 
-if [[ "$LOGIN_BODY" != "Ok." ]]; then
+if [[ "$login_body" != "Ok." ]]; then
     log "ERROR: Authentication failed"
     exit 1
 fi
+
+get_qbt_listen_port() {
+    curl -fsS -b "$COOKIE_JAR" \
+        "$QBITTORRENT_URL/api/v2/app/preferences" \
+        | tr ',{}' '\n' \
+        | awk -F: '/"listen_port"/ {gsub(/[^0-9]/, "", $2); print $2; exit}'
+}
+
+CURRENT_QBT_PORT="$(get_qbt_listen_port || true)"
+
+if [[ "$CURRENT_QBT_PORT" == "$PORT" ]]; then
+    umask 077
+    echo "$PORT" > "$CACHE_FILE"
+    log "qBittorrent already using port $PORT"
+    exit 0
+fi
+
+log "Updating qBittorrent port -> $PORT"
 
 curl -fsS -b "$COOKIE_JAR" -X POST \
     --data 'json={"random_port":false}' \
@@ -147,12 +113,7 @@ curl -fsS -b "$COOKIE_JAR" -X POST \
     --data "json={\"listen_port\":$PORT}" \
     "$QBITTORRENT_URL/api/v2/app/setPreferences" >/dev/null
 
-APPLIED_PORT="$(
-    curl -fsS -b "$COOKIE_JAR" \
-    "$QBITTORRENT_URL/api/v2/app/preferences" \
-    | tr ',{}' '\n' \
-    | awk -F: '/"listen_port"/ {gsub(/[^0-9]/, "", $2); print $2; exit}'
-)"
+APPLIED_PORT="$(get_qbt_listen_port || true)"
 
 if [[ "$APPLIED_PORT" != "$PORT" ]]; then
     log "ERROR: qBittorrent did not apply port $PORT (reported: ${APPLIED_PORT:-unknown})"
