@@ -294,7 +294,8 @@ select_best_server() {
         exit 1
     fi
 
-    if [[ -f "$SERVER_SELECTION_FILE" && -n "$current_config" && "$best_profile" != "$current_profile_name" && ! server_is_bad "$current_profile_name" ]]; then
+    if [[ -f "$SERVER_SELECTION_FILE" && -n "$current_config" && "$best_profile" != "$current_profile_name" ]] \
+        && ! server_is_bad "$current_profile_name"; then
         local improvement_ms
         improvement_ms=$((current_latency_ms - best_latency_ms))
 

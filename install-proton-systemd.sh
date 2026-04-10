@@ -78,6 +78,15 @@ require_command() {
     fi
 }
 
+validate_shell_syntax() {
+    local path="$1"
+
+    if ! bash -n "$path"; then
+        echo "ERROR: Shell syntax validation failed for $path" >&2
+        exit 1
+    fi
+}
+
 normalize_text_file() {
     local source_file="$1"
     local output_file="$2"
@@ -116,7 +125,10 @@ validate_bundle() {
 
     for name in "${SCRIPTS[@]}"; do
         ensure_source_file "${SCRIPT_DIR}/${name}"
+        validate_shell_syntax "${SCRIPT_DIR}/${name}"
     done
+
+    validate_shell_syntax "${SCRIPT_DIR}/install-proton-systemd.sh"
 
     for name in "${SERVICES[@]}"; do
         ensure_source_file "${SCRIPT_DIR}/${name}"
