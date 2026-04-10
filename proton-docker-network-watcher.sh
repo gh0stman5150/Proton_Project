@@ -24,6 +24,7 @@ QBT_SYNC_SCRIPT="${QBT_SYNC_SCRIPT:-$DIR/proton-qbittorrent-sync-safe.sh}"
 QBITTORRENT_ENV_FILE="${QBITTORRENT_ENV_FILE:-/etc/proton/qbittorrent.env}"
 STATE_DIR="${STATE_DIR:-/run/proton}"
 SERVER_SELECTION_FILE="${SERVER_SELECTION_FILE:-${STATE_DIR}/current-server.env}"
+DOCKER_NETWORK_CIDR_STATE_FILE="${DOCKER_NETWORK_CIDR_STATE_FILE:-${STATE_DIR}/docker-network-cidr}"
 
 mkdir -p /run/proton
 touch "$LAST_FILE" 2>/dev/null || true
@@ -153,6 +154,12 @@ reapply_routes() {
 	fi
 
 	printf "%s" "$new_cidr" >"$LAST_FILE" || true
+	if [[ -n "$new_cidr" ]]; then
+		umask 077
+		printf "%s" "$new_cidr" >"$DOCKER_NETWORK_CIDR_STATE_FILE" || true
+	else
+		rm -f "$DOCKER_NETWORK_CIDR_STATE_FILE" 2>/dev/null || true
+	fi
 }
 
 refresh_qb_dnat() {

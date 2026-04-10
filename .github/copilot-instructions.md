@@ -9,12 +9,13 @@ Implement a stable, secure routing design that forces all traffic through the Pr
 - Everything else, including all media stack services, must route through the VPN
 
 Additionally, qBittorrent must automatically update its listening port whenever Proton's forwarded port changes or when the VPN reconnects.
+When the listening port is updated, the qBittorrent container must be taken down and restarted to apply the new port.
 
 ---
 
 ## Stack Services in Scope
 
-qBittorrent, SABnzbd, Lidarr, Radarr, Sonarr, Whisparr, Bazarr, Prowlarr, Huntarr, Reaparr, Flaresolverr, Autobrr, Plex, Overseerr/Seer, Prometheus
+qBittorrent, SABnzbd, Lidarr, Radarr, Sonarr, Whisparr, Bazarr, Prowlarr, Huntarr, Reaparr, Flaresolverr, Autobrr, Plex, Overseerr/Seer
 
 ---
 
@@ -50,7 +51,6 @@ Before making any changes, locate and analyze the following:
 - Ensure VPN-bound containers cannot reach WAN directly
 - Prefer one of the following isolation approaches:
   - A network namespace or dedicated VPN gateway container
-  - `--cap-add=NET_ADMIN` scoped only to containers that require it
   - Explicit Docker networks routing through a single egress point
 - Ensure Plex and Overseerr remain accessible from the LAN as intended
 

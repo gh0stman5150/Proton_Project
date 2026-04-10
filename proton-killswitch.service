@@ -1,14 +1,32 @@
 [Unit]
-Description=Proton WireGuard
+Description=Proton Kill Switch
 After=network-online.target
 Wants=network-online.target
+Before=proton-wg.service
 
 [Service]
 Type=oneshot
 EnvironmentFile=-/etc/proton/proton-common.env
-ExecStart=/usr/local/bin/proton/proton-wg-up-safe.sh
-ExecStop=/usr/local/bin/proton/proton-wg-down-safe.sh
+ExecStart=/usr/local/bin/proton/proton-killswitch-dispatch.sh
 RemainAfterExit=yes
+TimeoutStartSec=60
+UMask=0077
+NoNewPrivileges=no
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+ProtectControlGroups=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+ReadWritePaths=/run/proton
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SETPCAP
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_SETPCAP
 
 [Install]
 WantedBy=multi-user.target

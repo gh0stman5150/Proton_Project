@@ -6,6 +6,7 @@ WG_PROFILE="${WG_PROFILE:-proton}"
 VPN_INTERFACE="${VPN_INTERFACE:-$WG_PROFILE}"
 STATE_DIR="${STATE_DIR:-/run/proton}"
 WG_RUNTIME_DIR="${WG_RUNTIME_DIR:-/etc/wireguard/proton-runtime}"
+DOCKER_NETWORK_CIDR_STATE_FILE="${DOCKER_NETWORK_CIDR_STATE_FILE:-${STATE_DIR}/docker-network-cidr}"
 SERVER_SELECTION_FILE="${SERVER_SELECTION_FILE:-${STATE_DIR}/current-server.env}"
 WG_CONFIG="${WG_CONFIG:-/etc/wireguard/${WG_PROFILE}.conf}"
 FILTERED_CONFIG_PATH="${WG_RUNTIME_DIR}/${WG_PROFILE}.conf"
@@ -40,6 +41,13 @@ require_command() {
 		log "ERROR: Required command '$cmd' is not installed."
 		exit 1
 	fi
+}
+
+trim_field() {
+	local value="$1"
+	value="${value#"${value%%[![:space:]]*}"}"
+	value="${value%"${value##*[![:space:]]}"}"
+	printf '%s\n' "$value"
 }
 
 resolved_dns_enabled() {
@@ -84,9 +92,13 @@ detect_lan_cidr() {
 	fi
 }
 
-for cmd in ip wg-quick; do
+for cmd in cat ip wg-quick; do
 	require_command "$cmd"
 done
+
+if [[ -z "$DOCKER_NETWORK_CIDR" && -f "$DOCKER_NETWORK_CIDR_STATE_FILE" ]]; then
+	DOCKER_NETWORK_CIDR="$(cat "$DOCKER_NETWORK_CIDR_STATE_FILE" 2>/dev/null || true)"
+fi
 
 if [[ -f "$SERVER_SELECTION_FILE" ]]; then
 	# shellcheck disable=SC1090
@@ -99,22 +111,30 @@ fi
 
 # Remove policy routing before tearing down the interface so the kernel
 # does not briefly try to route fwmark'd packets through a gone interface.
-ip rule del to "$DOCKER_NETWORK_CIDR" lookup main priority "$DOCKER_DEST_MAIN_RULE_PRIORITY" 2>/dev/null || true
+for cidr in ${DOCKER_NETWORK_CIDR//,/ }; do
+	cidr="$(trim_field "$cidr")"
+	[[ -n "$cidr" ]] || continue
+	ip rule del to "$cidr" lookup main priority "$DOCKER_DEST_MAIN_RULE_PRIORITY" 2>/dev/null || true
+done
 ip rule del fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100 2>/dev/null || true
 ip rule del not fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100 2>/dev/null || true
 ip rule del table main suppress_prefixlength 0 priority 99 2>/dev/null || true
 ip route flush table "$VPN_TABLE" 2>/dev/null || true
 if [[ -n "$DOCKER_NETWORK_CIDR" ]]; then
 	detect_lan_cidr
-	ip rule del from "$DOCKER_NETWORK_CIDR" to "$DOCKER_NETWORK_CIDR" lookup main priority "$DOCKER_LOCAL_RULE_PRIORITY" 2>/dev/null || true
-	if [[ -n "$LAN_CIDR" ]]; then
-		ip rule del from "$DOCKER_NETWORK_CIDR" to "$LAN_CIDR" lookup main priority "$DOCKER_LAN_RULE_PRIORITY" 2>/dev/null || true
-	fi
-	ip rule del from "$DOCKER_NETWORK_CIDR" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY" 2>/dev/null || true
+	for cidr in ${DOCKER_NETWORK_CIDR//,/ }; do
+		cidr="$(trim_field "$cidr")"
+		[[ -n "$cidr" ]] || continue
+		ip rule del from "$cidr" to "$cidr" lookup main priority "$DOCKER_LOCAL_RULE_PRIORITY" 2>/dev/null || true
+		if [[ -n "$LAN_CIDR" ]]; then
+			ip rule del from "$cidr" to "$LAN_CIDR" lookup main priority "$DOCKER_LAN_RULE_PRIORITY" 2>/dev/null || true
+		fi
+		ip rule del from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY" 2>/dev/null || true
 
-	if command -v iptables >/dev/null 2>&1; then
-		iptables -t raw -D PREROUTING -i "$VPN_INTERFACE" -d "$DOCKER_NETWORK_CIDR" -j ACCEPT 2>/dev/null || true
-	fi
+		if command -v iptables >/dev/null 2>&1; then
+			iptables -t raw -D PREROUTING -i "$VPN_INTERFACE" -d "$cidr" -j ACCEPT 2>/dev/null || true
+		fi
+	done
 fi
 
 if command -v iptables >/dev/null 2>&1; then
@@ -131,3 +151,5 @@ elif [[ -f "$WG_CONFIG" ]]; then
 else
 	wg-quick down "$WG_PROFILE" || true
 fi
+
+rm -f "$DOCKER_NETWORK_CIDR_STATE_FILE"

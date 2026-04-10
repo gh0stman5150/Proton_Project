@@ -14,6 +14,7 @@ INPUT_CHAIN="${INPUT_CHAIN:-PROTON_INPUT}"
 OUTPUT_CHAIN="${OUTPUT_CHAIN:-PROTON_OUTPUT}"
 NAT_CHAIN="${NAT_CHAIN:-PROTON_POSTROUTING}"
 STATE_DIR="${STATE_DIR:-/run/proton}"
+DOCKER_NETWORK_CIDR_STATE_FILE="${DOCKER_NETWORK_CIDR_STATE_FILE:-${STATE_DIR}/docker-network-cidr}"
 SERVER_SELECTION_FILE="${SERVER_SELECTION_FILE:-${STATE_DIR}/current-server.env}"
 SERVER_RESELECT_FILE="${SERVER_RESELECT_FILE:-${STATE_DIR}/reselect-server.flag}"
 SERVER_POOL_ENABLED="${SERVER_POOL_ENABLED:-auto}"
@@ -46,12 +47,16 @@ require_command() {
 	fi
 }
 
-for cmd in awk chmod getent ip iptables mkdir systemd-cat tr; do
+for cmd in awk cat chmod getent ip iptables mkdir systemd-cat tr; do
 	require_command "$cmd"
 done
 
 mkdir -p "$STATE_DIR"
 chmod 700 "$STATE_DIR"
+
+if [[ -z "$DOCKER_NETWORK_CIDR" && -f "$DOCKER_NETWORK_CIDR_STATE_FILE" ]]; then
+	DOCKER_NETWORK_CIDR="$(cat "$DOCKER_NETWORK_CIDR_STATE_FILE" 2>/dev/null || true)"
+fi
 
 server_pool_requested() {
 	case "$SERVER_POOL_ENABLED" in

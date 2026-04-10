@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+COMMON_ENV_FILE="${PROTON_COMMON_ENV_FILE:-/etc/proton/proton-common.env}"
+if [[ -f "$COMMON_ENV_FILE" ]]; then
+    # shellcheck disable=SC1090
+    source "$COMMON_ENV_FILE"
+fi
+
 LOG_TAG="${LOG_TAG:-proton-server}"
 STATE_DIR="${STATE_DIR:-/run/proton}"
 SERVER_SELECTION_FILE="${SERVER_SELECTION_FILE:-${STATE_DIR}/current-server.env}"
@@ -11,6 +17,11 @@ WG_POOL_DIR="${WG_POOL_DIR:-/etc/wireguard/proton-pool}"
 BAD_SERVER_COOLDOWN="${BAD_SERVER_COOLDOWN:-900}"
 PING_TIMEOUT_SECONDS="${PING_TIMEOUT_SECONDS:-1}"
 PING_COUNT="${PING_COUNT:-1}"
+SERVER_SWITCH_MIN_IMPROVEMENT_MS="${SERVER_SWITCH_MIN_IMPROVEMENT_MS:-10}"
+SERVER_SWITCH_DEGRADED_LATENCY_MS="${SERVER_SWITCH_DEGRADED_LATENCY_MS:-75}"
+SERVER_POOL_STRICT_LINT="${SERVER_POOL_STRICT_LINT:-on}"
+WG_EXPECTED_DNS="${WG_EXPECTED_DNS:-10.2.0.1}"
+WG_LINT_ALLOW_MISSING_DNS="${WG_LINT_ALLOW_MISSING_DNS:-off}"
 
 log() {
     echo "$(date '+%F %T') | $*" | systemd-cat -t "$LOG_TAG"
@@ -28,7 +39,7 @@ require_command() {
 require_common_tools() {
     local cmd
 
-    for cmd in awk chmod date mkdir mv rm systemd-cat; do
+    for cmd in awk chmod date grep mkdir mv paste rm systemd-cat tr; do
         require_command "$cmd"
     done
 }
@@ -76,6 +87,57 @@ config_endpoint_port() {
     local endpoint
     endpoint="$(config_endpoint_value "$1")"
     echo "${endpoint##*:}"
+}
+
+config_dns_value() {
+    awk -F '=' '/^[[:space:]]*DNS[[:space:]]*=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit}' "$1"
+}
+
+normalize_csv() {
+    printf '%s' "$1" | tr ',' '\n' | awk '
+        {
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", $0)
+            if ($0 != "") {
+                print tolower($0)
+            }
+        }
+    ' | paste -sd, -
+}
+
+strict_lint_enabled() {
+    [[ "$SERVER_POOL_STRICT_LINT" =~ ^(1|true|yes|on)$ ]]
+}
+
+allow_missing_dns() {
+    [[ "$WG_LINT_ALLOW_MISSING_DNS" =~ ^(1|true|yes|on)$ ]]
+}
+
+lint_config() {
+    local config="$1"
+    local dns_value expected_dns
+
+    strict_lint_enabled || return 0
+
+    if grep -qiE '^[[:space:]]*(PreUp|PostUp|PreDown|PostDown|SaveConfig)[[:space:]]*=' "$config"; then
+        log "Skipping $(config_profile "$config") because it contains disallowed WireGuard hooks or SaveConfig"
+        return 1
+    fi
+
+    dns_value="$(normalize_csv "$(config_dns_value "$config")")"
+    expected_dns="$(normalize_csv "$WG_EXPECTED_DNS")"
+
+    if [[ -z "$dns_value" ]]; then
+        if allow_missing_dns; then
+            return 0
+        fi
+        log "Skipping $(config_profile "$config") because it is missing DNS"
+        return 1
+    fi
+
+    if [[ -n "$expected_dns" && "$dns_value" != "$expected_dns" ]]; then
+        log "Skipping $(config_profile "$config") because its DNS does not match WG_EXPECTED_DNS"
+        return 1
+    fi
 }
 
 resolve_endpoint_ip() {
@@ -160,10 +222,17 @@ select_best_server() {
     local best_endpoint_ip=""
     local best_endpoint_port=""
     local best_latency_ms=""
+    local current_profile_name=""
+    local current_config=""
+    local current_endpoint_host=""
+    local current_endpoint_ip=""
+    local current_endpoint_port=""
+    local current_latency_ms=""
     local config
 
     require_selection_tools
     cleanup_bad_servers
+    current_profile_name="$(current_profile)"
 
     while IFS= read -r config; do
         local profile endpoint_host endpoint_ip endpoint_port latency_ms
@@ -173,6 +242,10 @@ select_best_server() {
 
         if [[ "$allow_bad" != "1" ]] && server_is_bad "$profile"; then
             log "Skipping cooling-down server $profile"
+            continue
+        fi
+
+        if ! lint_config "$config"; then
             continue
         fi
 
@@ -199,17 +272,41 @@ select_best_server() {
             best_endpoint_port="$endpoint_port"
             best_latency_ms="$latency_ms"
         fi
+
+        if [[ "$profile" == "$current_profile_name" ]]; then
+            current_config="$config"
+            current_endpoint_host="$endpoint_host"
+            current_endpoint_ip="$endpoint_ip"
+            current_endpoint_port="$endpoint_port"
+            current_latency_ms="$latency_ms"
+        fi
     done < <(candidate_configs)
 
     if [[ -z "$best_profile" && "$allow_bad" != "1" ]]; then
         log "No healthy server candidates were available; retrying with cooling-down nodes"
         select_best_server 1
-        return 0
+        return $?
     fi
 
     if [[ -z "$best_profile" ]]; then
+        log "No pools available even with cooling-down nodes; aborting"
         log "ERROR: No WireGuard profiles were available for selection."
         exit 1
+    fi
+
+    if [[ -f "$SERVER_SELECTION_FILE" && -n "$current_config" && "$best_profile" != "$current_profile_name" && ! server_is_bad "$current_profile_name" ]]; then
+        local improvement_ms
+        improvement_ms=$((current_latency_ms - best_latency_ms))
+
+        if (( current_latency_ms < SERVER_SWITCH_DEGRADED_LATENCY_MS && improvement_ms < SERVER_SWITCH_MIN_IMPROVEMENT_MS )); then
+            log "Keeping current server $current_profile_name (${current_latency_ms}ms); best candidate $best_profile improves latency by only ${improvement_ms}ms"
+            best_profile="$current_profile_name"
+            best_config="$current_config"
+            best_endpoint_host="$current_endpoint_host"
+            best_endpoint_ip="$current_endpoint_ip"
+            best_endpoint_port="$current_endpoint_port"
+            best_latency_ms="$current_latency_ms"
+        fi
     fi
 
     save_selection \

@@ -50,6 +50,8 @@ QBT_NETWORK_NAME=starr
 
 If these are present the host-side sync script will add an nft DNAT rule that maps the Proton public forwarded port -> the qBittorrent container internal port. This preserves the container on the `starr` network (no recreate) while keeping inbound forwarding functional.
 
+When the forwarded port changes, the sync script also restarts the qBittorrent container so the torrent listener re-binds to the new port before DNAT is refreshed.
+
 Because the Proton services run on the host, `QBITTORRENT_URL` should point at the host-published qBittorrent Web UI port. Docker network names such as `starr_network` are not directly reachable from these host systemd services unless you separately proxy or publish them.
 
 The hardened path expects:
@@ -96,6 +98,7 @@ Live port-forward state is stored under `/run/proton`:
 
 - `/run/proton/proton-port.state`
 - `/run/proton/qbt-port.cache`
+- `/run/proton/docker-network-cidr`
 - `/run/proton/current-server.env`
 - `/run/proton/bad-servers.tsv`
 - `/run/proton/reselect-server.flag`

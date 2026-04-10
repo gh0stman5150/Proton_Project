@@ -2,6 +2,7 @@
 
 set -euo pipefail
 
+MODE="${1:-loop}"
 WG_PROFILE="${WG_PROFILE:-proton}"
 VPN_INTERFACE="${VPN_INTERFACE:-$WG_PROFILE}"
 NATPMP_GATEWAY="${NATPMP_GATEWAY:-10.2.0.1}"
@@ -17,6 +18,7 @@ QBITTORRENT_SYNC_SCRIPT="${QBITTORRENT_SYNC_SCRIPT:-/usr/local/bin/proton/proton
 SERVER_POOL_ENABLED="${SERVER_POOL_ENABLED:-auto}"
 SERVER_MANAGER_SCRIPT="${SERVER_MANAGER_SCRIPT:-/usr/local/bin/proton/proton-server-manager.sh}"
 SERVER_SELECTION_FILE="${SERVER_SELECTION_FILE:-${STATE_DIR}/current-server.env}"
+RECOVERY_LOCK_FILE="${RECOVERY_LOCK_FILE:-${STATE_DIR}/recovery.lock}"
 WG_POOL_DIR="${WG_POOL_DIR:-/etc/wireguard/proton-pool}"
 CURRENT_WG_PROFILE="$WG_PROFILE"
 
@@ -33,12 +35,21 @@ require_command() {
     fi
 }
 
-for cmd in awk chmod cut grep ip mkdir natpmpc rm systemd-cat timeout; do
+for cmd in awk chmod cut flock grep ip mkdir natpmpc rm systemd-cat timeout; do
     require_command "$cmd"
 done
 
 mkdir -p "$STATE_DIR"
 chmod 700 "$STATE_DIR"
+
+case "$MODE" in
+    loop|once)
+        ;;
+    *)
+        log "ERROR: Unsupported mode '$MODE' (expected 'loop' or 'once')"
+        exit 1
+        ;;
+esac
 
 server_pool_requested() {
     case "$SERVER_POOL_ENABLED" in
@@ -117,16 +128,23 @@ clear_state() {
 }
 
 reconnect() {
-    log "Recycling WireGuard tunnel..."
-    load_selected_server
+    (
+        flock -n 200 || {
+            log "Recovery lock busy, skipping reconnect"
+            exit 0
+        }
 
-    if server_pool_requested && [[ -x "$SERVER_MANAGER_SCRIPT" ]]; then
-        "$SERVER_MANAGER_SCRIPT" mark-bad "$CURRENT_WG_PROFILE" "port-forward-failures" >/dev/null 2>&1 || true
-    fi
+        log "Recycling WireGuard tunnel..."
+        load_selected_server
 
-    clear_state
-    "$WG_UP_SCRIPT"
-    sleep 5
+        if server_pool_requested && [[ -x "$SERVER_MANAGER_SCRIPT" ]]; then
+            "$SERVER_MANAGER_SCRIPT" mark-bad "$CURRENT_WG_PROFILE" "port-forward-failures" >/dev/null 2>&1 || true
+        fi
+
+        clear_state
+        "$WG_UP_SCRIPT"
+        sleep 5
+    ) 200>"$RECOVERY_LOCK_FILE"
 }
 
 log "Starting WireGuard port forward loop..."
@@ -136,6 +154,49 @@ CURRENT_PORT="$(load_state_port)"
 FAILURES=0
 
 load_selected_server
+
+if [[ "$MODE" == "once" ]]; then
+    IP="$(get_ip)"
+
+    if [[ -z "$IP" ]]; then
+        log "No VPN IP; one-shot NAT-PMP refresh cannot run"
+        exit 1
+    fi
+
+    if [[ "$IP" != "$LAST_IP" ]]; then
+        log "VPN IP changed: ${LAST_IP:-unknown} -> $IP"
+        LAST_IP="$IP"
+        CURRENT_PORT=""
+    fi
+
+    if [[ -n "$CURRENT_PORT" ]]; then
+        log "Refreshing port $CURRENT_PORT..."
+        OUT="$(refresh_port "$CURRENT_PORT" || true)"
+    else
+        log "Requesting new port..."
+        OUT="$(request_port || true)"
+    fi
+
+    PORT="$(echo "$OUT" | extract_port)"
+
+    if [[ -z "$PORT" ]]; then
+        log "One-shot NAT-PMP refresh failed"
+        if [[ -n "$OUT" ]]; then
+            log "Last NAT-PMP output: ${OUT//$'\n'/; }"
+        fi
+        exit 1
+    fi
+
+    log "Got port: $PORT"
+    save_state "$PORT" "$IP"
+
+    if ! "$QBITTORRENT_SYNC_SCRIPT"; then
+        log "ERROR: qBittorrent port sync failed during one-shot NAT-PMP refresh"
+        exit 1
+    fi
+
+    exit 0
+fi
 
 while true; do
     IP="$(get_ip)"

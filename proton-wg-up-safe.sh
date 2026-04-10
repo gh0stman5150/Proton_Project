@@ -9,6 +9,7 @@ WG_CONFIG="${WG_CONFIG:-/etc/wireguard/${WG_PROFILE}.conf}"
 WG_IPV6_ENABLED="${WG_IPV6_ENABLED:-off}"
 STATE_DIR="${STATE_DIR:-/run/proton}"
 WG_RUNTIME_DIR="${WG_RUNTIME_DIR:-/etc/wireguard/proton-runtime}"
+DOCKER_NETWORK_CIDR_STATE_FILE="${DOCKER_NETWORK_CIDR_STATE_FILE:-${STATE_DIR}/docker-network-cidr}"
 SERVER_SELECTION_FILE="${SERVER_SELECTION_FILE:-${STATE_DIR}/current-server.env}"
 SERVER_RESELECT_FILE="${SERVER_RESELECT_FILE:-${STATE_DIR}/reselect-server.flag}"
 SERVER_POOL_ENABLED="${SERVER_POOL_ENABLED:-auto}"
@@ -47,7 +48,7 @@ require_command() {
 	fi
 }
 
-for cmd in awk chmod cut ip mkdir mktemp mv rm systemd-cat wg-quick; do
+for cmd in awk cat chmod cut ip mkdir mktemp mv rm systemd-cat wg-quick; do
 	require_command "$cmd"
 done
 
@@ -153,6 +154,8 @@ detect_lan_cidr() {
 }
 
 ensure_docker_raw_return_rule() {
+	local cidr
+
 	if [[ -z "$DOCKER_NETWORK_CIDR" ]]; then
 		return 0
 	fi
@@ -165,9 +168,13 @@ ensure_docker_raw_return_rule() {
 	# VPN replies to container-originated traffic can re-enter on the tunnel
 	# interface already destined for the container IP, so allow that path
 	# before Docker's "! -i br-... -j DROP" rules fire.
-	iptables -t raw -D PREROUTING -i "$VPN_INTERFACE" -d "$DOCKER_NETWORK_CIDR" -j ACCEPT 2>/dev/null || true
-	iptables -t raw -I PREROUTING 1 -i "$VPN_INTERFACE" -d "$DOCKER_NETWORK_CIDR" -j ACCEPT
-	log "Allowed VPN return traffic from $VPN_INTERFACE to Docker subnet $DOCKER_NETWORK_CIDR in raw PREROUTING"
+	for cidr in ${DOCKER_NETWORK_CIDR//,/ }; do
+		cidr="$(trim_field "$cidr")"
+		[[ -n "$cidr" ]] || continue
+		iptables -t raw -D PREROUTING -i "$VPN_INTERFACE" -d "$cidr" -j ACCEPT 2>/dev/null || true
+		iptables -t raw -I PREROUTING 1 -i "$VPN_INTERFACE" -d "$cidr" -j ACCEPT
+		log "Allowed VPN return traffic from $VPN_INTERFACE to Docker subnet $cidr in raw PREROUTING"
+	done
 }
 
 ensure_vpn_tcp_mss_clamp_rules() {
@@ -359,9 +366,42 @@ prepare_wg_config() {
 	WG_CONFIG_TO_USE="$FILTERED_CONFIG_PATH"
 }
 
+persist_docker_network_cidr() {
+	if [[ -n "$DOCKER_NETWORK_CIDR" ]]; then
+		umask 077
+		printf '%s' "$DOCKER_NETWORK_CIDR" >"$DOCKER_NETWORK_CIDR_STATE_FILE"
+	else
+		rm -f "$DOCKER_NETWORK_CIDR_STATE_FILE"
+	fi
+}
+
+resolve_docker_network_cidr() {
+	local candidate=""
+	local subnet=""
+
+	if [[ -z "$DOCKER_NETWORK_CIDR" && command -v docker >/dev/null 2>&1 ]]; then
+		candidate=$(docker network ls --format '{{.Name}}' | grep -i starr | head -n1 || true)
+		if [[ -n "$candidate" ]]; then
+			subnet=$(docker network inspect -f '{{range .IPAM.Config}}{{.Subnet}}{{end}}' "$candidate" 2>/dev/null || true)
+			if [[ -n "$subnet" ]]; then
+				DOCKER_NETWORK_CIDR="$subnet"
+				log "Auto-detected Docker network '$candidate' -> $DOCKER_NETWORK_CIDR"
+			fi
+		fi
+	fi
+
+	if [[ -z "$DOCKER_NETWORK_CIDR" && -f "$DOCKER_NETWORK_CIDR_STATE_FILE" ]]; then
+		DOCKER_NETWORK_CIDR="$(cat "$DOCKER_NETWORK_CIDR_STATE_FILE" 2>/dev/null || true)"
+	fi
+
+	persist_docker_network_cidr
+	export DOCKER_NETWORK_CIDR
+}
+
 load_selected_server
 prepare_wg_config "$WG_CONFIG"
 DNS_SERVERS_CSV="$(config_dns_servers "$WG_CONFIG_TO_USE")"
+resolve_docker_network_cidr
 
 log "Bringing up WireGuard profile $WG_PROFILE..."
 
@@ -378,35 +418,33 @@ if [[ -x "$KILLSWITCH_SCRIPT" ]]; then
 fi
 
 wg-quick up "$WG_CONFIG_TO_USE"
+
+if uses_nftables_backend && [[ -x "$KILLSWITCH_SCRIPT" ]]; then
+	# The initial pre-up apply prevents leaks during interface bring-up. Re-run
+	# after the interface exists so nft postrouting masquerade is guaranteed.
+	"$KILLSWITCH_SCRIPT"
+fi
+
 configure_resolved_dns "$VPN_INTERFACE" "$DNS_SERVERS_CSV"
 
 inject_routes() {
-	local candidate=""
-	local subnet=""
-
-	# Attempt to auto-detect a Docker 'starr' network subnet if DOCKER_NETWORK_CIDR
-	# was not provided and the docker CLI is available. This helps when the
-	# qBittorrent container lives on a starr network and you want container
-	# traffic forced through the VPN.
-	if [[ -z "$DOCKER_NETWORK_CIDR" ]] && command -v docker >/dev/null 2>&1; then
-		candidate=$(docker network ls --format '{{.Name}}' | grep -i starr | head -n1 || true)
-		if [[ -n "$candidate" ]]; then
-			subnet=$(docker network inspect -f '{{range .IPAM.Config}}{{.Subnet}}{{end}}' "$candidate" 2>/dev/null || true)
-			if [[ -n "$subnet" ]]; then
-				DOCKER_NETWORK_CIDR="$subnet"
-				log "Auto-detected Docker network '$candidate' -> $DOCKER_NETWORK_CIDR"
-			fi
-		fi
-	fi
 	ip route del "$NATPMP_GATEWAY" 2>/dev/null || true
 
 	# Clean stale rules first (avoid duplicates)
-	ip rule del to "$DOCKER_NETWORK_CIDR" lookup main priority "$DOCKER_DEST_MAIN_RULE_PRIORITY" 2>/dev/null || true
+	for cidr in ${DOCKER_NETWORK_CIDR//,/ }; do
+		cidr="$(trim_field "$cidr")"
+		[[ -n "$cidr" ]] || continue
+		ip rule del to "$cidr" lookup main priority "$DOCKER_DEST_MAIN_RULE_PRIORITY" 2>/dev/null || true
+	done
 	ip rule del fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100 2>/dev/null || true
 	ip rule del not fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100 2>/dev/null || true
 	ip rule del table main suppress_prefixlength 0 priority 99 2>/dev/null || true
 	if [[ -n "$DOCKER_NETWORK_CIDR" ]]; then
-		ip rule add to "$DOCKER_NETWORK_CIDR" lookup main priority "$DOCKER_DEST_MAIN_RULE_PRIORITY"
+		for cidr in ${DOCKER_NETWORK_CIDR//,/ }; do
+			cidr="$(trim_field "$cidr")"
+			[[ -n "$cidr" ]] || continue
+			ip rule add to "$cidr" lookup main priority "$DOCKER_DEST_MAIN_RULE_PRIORITY"
+		done
 	fi
 	if uses_nftables_backend; then
 		ip rule add fwmark "$VPN_FWMARK" lookup "$VPN_TABLE" priority 100
@@ -432,16 +470,20 @@ inject_routes() {
 	# other container-sourced traffic is forced into the VPN table.
 	if [[ -n "$DOCKER_NETWORK_CIDR" ]]; then
 		detect_lan_cidr
-		ip rule del from "$DOCKER_NETWORK_CIDR" to "$DOCKER_NETWORK_CIDR" lookup main priority "$DOCKER_LOCAL_RULE_PRIORITY" 2>/dev/null || true
-		ip rule add from "$DOCKER_NETWORK_CIDR" to "$DOCKER_NETWORK_CIDR" lookup main priority "$DOCKER_LOCAL_RULE_PRIORITY"
+		for cidr in ${DOCKER_NETWORK_CIDR//,/ }; do
+			cidr="$(trim_field "$cidr")"
+			[[ -n "$cidr" ]] || continue
+			ip rule del from "$cidr" to "$cidr" lookup main priority "$DOCKER_LOCAL_RULE_PRIORITY" 2>/dev/null || true
+			ip rule add from "$cidr" to "$cidr" lookup main priority "$DOCKER_LOCAL_RULE_PRIORITY"
 
-		if [[ -n "$LAN_CIDR" ]]; then
-			ip rule del from "$DOCKER_NETWORK_CIDR" to "$LAN_CIDR" lookup main priority "$DOCKER_LAN_RULE_PRIORITY" 2>/dev/null || true
-			ip rule add from "$DOCKER_NETWORK_CIDR" to "$LAN_CIDR" lookup main priority "$DOCKER_LAN_RULE_PRIORITY"
-		fi
+			if [[ -n "$LAN_CIDR" ]]; then
+				ip rule del from "$cidr" to "$LAN_CIDR" lookup main priority "$DOCKER_LAN_RULE_PRIORITY" 2>/dev/null || true
+				ip rule add from "$cidr" to "$LAN_CIDR" lookup main priority "$DOCKER_LAN_RULE_PRIORITY"
+			fi
 
-		ip rule del from "$DOCKER_NETWORK_CIDR" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY" 2>/dev/null || true
-		ip rule add from "$DOCKER_NETWORK_CIDR" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY"
+			ip rule del from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY" 2>/dev/null || true
+			ip rule add from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY"
+		done
 		ensure_docker_raw_return_rule
 		log "Docker network $DOCKER_NETWORK_CIDR routed via $VPN_INTERFACE table $VPN_TABLE while local Docker/LAN traffic stays on main"
 	fi
