@@ -187,7 +187,11 @@ reconnect() {
     ) 200>"$RECOVERY_LOCK_FILE"
 }
 
-log "Starting WireGuard port forward loop..."
+if [[ "$MODE" == "once" ]]; then
+    log "Starting one-shot NAT-PMP refresh..."
+else
+    log "Starting WireGuard port forward loop..."
+fi
 
 LAST_IP="$(load_state_ip)"
 CURRENT_PORT="$(load_state_port)"

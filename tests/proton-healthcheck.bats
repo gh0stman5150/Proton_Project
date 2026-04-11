@@ -80,3 +80,23 @@ EOF
   [ "$status" -eq 42 ]
   [[ "$output" == *"Low throughput detected"* ]]
 }
+
+@test "failed NAT-PMP recovery reports the real non-zero exit code" {
+  cat > "$TEST_TMPDIR/port-forward-once.sh" <<'EOF'
+#!/usr/bin/env bash
+exit 7
+EOF
+  chmod +x "$TEST_TMPDIR/port-forward-once.sh"
+
+  run env \
+    QBITTORRENT_ENV_FILE="$QBITTORRENT_ENV_FILE" \
+    QBT_COMMON_SCRIPT="$QBT_COMMON_SCRIPT" \
+    PORT_FORWARD_SCRIPT="$TEST_TMPDIR/port-forward-once.sh" \
+    CHECK_INTERVAL=60 \
+    MIN_COMBINED_SPEED_BPS=65536 \
+    MAX_LOW_SPEED_CHECKS=1 \
+    bash ./proton-healthcheck.sh
+
+  [ "$status" -eq 42 ]
+  [[ "$output" == *"Recovery action 'NAT-PMP refresh' failed with exit 7"* ]]
+}

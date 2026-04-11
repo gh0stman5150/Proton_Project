@@ -193,16 +193,16 @@ recover() {
     if with_recovery_lock "$action_name" "$action_func" "$speed"; then
         RECOVERY_STAGE="$next_stage"
         return 0
-    fi
+    else
+        rc=$?
+        if [[ "$rc" -eq 99 ]]; then
+            return 0
+        fi
 
-    rc=$?
-    if [[ "$rc" -eq 99 ]]; then
+        log "Recovery action '$action_name' failed with exit $rc"
+        RECOVERY_STAGE="$next_stage"
         return 0
     fi
-
-    log "Recovery action '$action_name' failed with exit $rc"
-    RECOVERY_STAGE="$next_stage"
-    return 0
 }
 
 reset_recovery_state() {

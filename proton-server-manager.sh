@@ -161,22 +161,62 @@ port_forward_allowlist_active() {
     [[ "$(profile_state_count "$PF_CAPABLE_PROFILES_FILE")" -gt 0 ]]
 }
 
+profile_is_capable() {
+    local profile="$1"
+
+    profile_in_state_file "$PF_CAPABLE_PROFILES_FILE" "$profile"
+}
+
+profile_is_incapable() {
+    local profile="$1"
+
+    profile_in_state_file "$PF_INCAPABLE_PROFILES_FILE" "$profile"
+}
+
+profile_port_forward_category() {
+    local profile="$1"
+
+    if ! port_forward_required; then
+        echo "unrestricted"
+        return 0
+    fi
+
+    if profile_is_incapable "$profile"; then
+        echo "incapable"
+    elif profile_is_capable "$profile"; then
+        echo "proven-good"
+    else
+        echo "unproven"
+    fi
+}
+
 profile_passes_port_forward_filter() {
     local profile="$1"
+    local allow_unproven="${2:-0}"
+    local category
 
     if ! port_forward_required; then
         return 0
     fi
 
-    if profile_in_state_file "$PF_INCAPABLE_PROFILES_FILE" "$profile"; then
-        log "Skipping $profile because it is marked port-forward incapable"
-        return 1
-    fi
+    category="$(profile_port_forward_category "$profile")"
 
-    if port_forward_allowlist_active && ! profile_in_state_file "$PF_CAPABLE_PROFILES_FILE" "$profile"; then
-        log "Skipping $profile because it is not in the port-forward allowlist"
-        return 1
-    fi
+    case "$category" in
+        incapable)
+            log "Skipping $profile because it is marked port-forward incapable"
+            return 1
+            ;;
+        proven-good|unrestricted)
+            return 0
+            ;;
+        unproven)
+            if port_forward_allowlist_active && [[ "$allow_unproven" != "1" ]]; then
+                log "Skipping $profile because it is unproven and the selector is currently constrained to proven-good port-forward nodes"
+                return 1
+            fi
+            return 0
+            ;;
+    esac
 
     return 0
 }
@@ -427,6 +467,7 @@ save_selection() {
 
 select_best_server() {
     local allow_bad="${1:-0}"
+    local allow_unproven="${2:-0}"
     local best_profile=""
     local best_config=""
     local best_endpoint_host=""
@@ -456,7 +497,7 @@ select_best_server() {
             continue
         fi
 
-        if ! profile_passes_port_forward_filter "$profile"; then
+        if ! profile_passes_port_forward_filter "$profile" "$allow_unproven"; then
             continue
         fi
 
@@ -497,9 +538,15 @@ select_best_server() {
         fi
     done < <(candidate_configs)
 
+    if [[ -z "$best_profile" && port_forward_allowlist_active && "$allow_unproven" != "1" ]]; then
+        log "No eligible proven-good port-forward candidates were available; retrying with unproven nodes"
+        select_best_server "$allow_bad" 1
+        return $?
+    fi
+
     if [[ -z "$best_profile" && "$allow_bad" != "1" ]]; then
         log "No healthy server candidates were available; retrying with cooling-down nodes"
-        select_best_server 1
+        select_best_server 1 "$allow_unproven"
         return $?
     fi
 

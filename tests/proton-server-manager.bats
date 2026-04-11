@@ -136,6 +136,58 @@ EOF
   grep -F 'SELECTED_WG_PROFILE=wg-b' "$SERVER_SELECTION_FILE"
 }
 
+@test "select widens to healthy unproven nodes when every proven-good node is cooling down" {
+  write_pool_config wg-a host-a
+  write_pool_config wg-b host-b
+
+  printf 'wg-a\t1\t45678\n' > "$PF_CAPABLE_PROFILES_FILE"
+  printf 'wg-a\t9999999999\tport-forward-failures\n' > "$BAD_SERVER_FILE"
+
+  run env \
+    STATE_DIR="$STATE_DIR" \
+    WG_POOL_DIR="$WG_POOL_DIR" \
+    SERVER_SELECTION_FILE="$SERVER_SELECTION_FILE" \
+    BAD_SERVER_FILE="$BAD_SERVER_FILE" \
+    SERVER_RESELECT_FILE="$SERVER_RESELECT_FILE" \
+    PF_CAPABLE_PROFILES_FILE="$PF_CAPABLE_PROFILES_FILE" \
+    PF_INCAPABLE_PROFILES_FILE="$PF_INCAPABLE_PROFILES_FILE" \
+    WG_EXPECTED_DNS="$WG_EXPECTED_DNS" \
+    SERVER_POOL_ENABLED="$SERVER_POOL_ENABLED" \
+    SERVER_POOL_STRICT_LINT="$SERVER_POOL_STRICT_LINT" \
+    PORT_FORWARD_REQUIRED="$PORT_FORWARD_REQUIRED" \
+    bash ./proton-server-manager.sh select
+
+  [ "$status" -eq 0 ]
+  grep -F 'SELECTED_WG_PROFILE=wg-b' "$SERVER_SELECTION_FILE"
+}
+
+@test "select still excludes incapable nodes when widening beyond the allowlist" {
+  write_pool_config wg-a host-a
+  write_pool_config wg-b host-b
+  write_pool_config wg-c host-c
+
+  printf 'wg-a\t1\t45678\n' > "$PF_CAPABLE_PROFILES_FILE"
+  printf 'wg-c\t1\tnatpmp-timeout\n' > "$PF_INCAPABLE_PROFILES_FILE"
+  printf 'wg-a\t9999999999\tport-forward-failures\n' > "$BAD_SERVER_FILE"
+
+  run env \
+    STATE_DIR="$STATE_DIR" \
+    WG_POOL_DIR="$WG_POOL_DIR" \
+    SERVER_SELECTION_FILE="$SERVER_SELECTION_FILE" \
+    BAD_SERVER_FILE="$BAD_SERVER_FILE" \
+    SERVER_RESELECT_FILE="$SERVER_RESELECT_FILE" \
+    PF_CAPABLE_PROFILES_FILE="$PF_CAPABLE_PROFILES_FILE" \
+    PF_INCAPABLE_PROFILES_FILE="$PF_INCAPABLE_PROFILES_FILE" \
+    WG_EXPECTED_DNS="$WG_EXPECTED_DNS" \
+    SERVER_POOL_ENABLED="$SERVER_POOL_ENABLED" \
+    SERVER_POOL_STRICT_LINT="$SERVER_POOL_STRICT_LINT" \
+    PORT_FORWARD_REQUIRED="$PORT_FORWARD_REQUIRED" \
+    bash ./proton-server-manager.sh select
+
+  [ "$status" -eq 0 ]
+  grep -F 'SELECTED_WG_PROFILE=wg-b' "$SERVER_SELECTION_FILE"
+}
+
 @test "select accepts IPv4-only DNS when IPv6 lint is disabled for the tunnel" {
   write_pool_config wg-a host-a
 
