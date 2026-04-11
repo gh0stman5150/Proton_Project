@@ -15,6 +15,7 @@ setup() {
   export NFT_LOG="$TEST_TMPDIR/nft.log"
   export CURL_LOG="$TEST_TMPDIR/curl.log"
   export PROJECT_DIR="$TEST_TMPDIR/project"
+  export DOCKER_CONFIG_DIR="$TEST_TMPDIR/docker-config"
   mkdir -p "$PROJECT_DIR"
 
   cat > "$TMPBIN/systemd-cat" <<'EOF'
@@ -67,7 +68,7 @@ EOF
 
   cat > "$TMPBIN/docker" <<'EOF'
 #!/usr/bin/env bash
-printf '%s\n' "$*" >> "$DOCKER_LOG"
+printf 'PWD=%s DOCKER_CONFIG=%s QBT_PUBLISHED_PORT=%s CMD=%s\n' "$PWD" "${DOCKER_CONFIG:-}" "${QBT_PUBLISHED_PORT:-}" "$*" >> "$DOCKER_LOG"
 if [[ "$1" == 'compose' ]]; then
   exit 0
 fi
@@ -123,7 +124,7 @@ EOF
   echo 'QBT_PUBLISHED_PORT=40000' > "$PORT_ENV_FILE"
   printf '40000' > "$CURL_STATE"
 
-  run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" bash ./proton-qbittorrent-sync-safe.sh
+  run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" bash ./proton-qbittorrent-sync-safe.sh
   [ "$status" -eq 0 ]
   [ ! -s "$DOCKER_LOG" ]
   grep -F 'QBT_PUBLISHED_PORT=40000' "$PORT_ENV_FILE"
@@ -135,11 +136,13 @@ EOF
   echo 'QBT_PUBLISHED_PORT=30000' > "$PORT_ENV_FILE"
   printf '30000' > "$CURL_STATE"
 
-  run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" bash ./proton-qbittorrent-sync-safe.sh
+  run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" bash ./proton-qbittorrent-sync-safe.sh
   [ "$status" -eq 0 ]
   grep -F 'QBT_PUBLISHED_PORT=40001' "$PORT_ENV_FILE"
-  grep -F 'compose --project-directory' "$DOCKER_LOG"
-  grep -F 'up -d --force-recreate --no-deps qbittorrent' "$DOCKER_LOG"
+  grep -F "PWD=$PROJECT_DIR" "$DOCKER_LOG"
+  grep -F "DOCKER_CONFIG=$DOCKER_CONFIG_DIR" "$DOCKER_LOG"
+  grep -F 'QBT_PUBLISHED_PORT=40001' "$DOCKER_LOG"
+  grep -F 'CMD=compose up -d --force-recreate --no-deps qbittorrent' "$DOCKER_LOG"
 }
 
 @test "legacy-dnat mode refreshes nft DNAT rules without invoking docker compose" {
@@ -147,9 +150,9 @@ EOF
   echo 'CURRENT_PORT=45000' > "$STATE_FILE"
   printf '45000' > "$CURL_STATE"
 
-  run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" bash ./proton-qbittorrent-sync-safe.sh
+  run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" bash ./proton-qbittorrent-sync-safe.sh
   [ "$status" -eq 0 ]
   grep -F 'add rule ip proton_nat prerouting tcp dport 45000 dnat to 172.18.0.10:6881 comment qbt-dnat' "$NFT_LOG"
   grep -F 'add rule ip proton_nat prerouting udp dport 45000 dnat to 172.18.0.10:6881 comment qbt-dnat' "$NFT_LOG"
-  ! grep -F 'compose --project-directory' "$DOCKER_LOG"
+  ! grep -F 'CMD=compose ' "$DOCKER_LOG"
 }

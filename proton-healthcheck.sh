@@ -48,9 +48,14 @@ qbt_source_env_file "$QBITTORRENT_ENV_FILE"
 
 : "${QBITTORRENT_URL:?QBITTORRENT_URL must be set in ${QBITTORRENT_ENV_FILE}}"
 
-if ! curl -fsS --max-time 5 "$QBITTORRENT_URL/api/v2/app/version" >/dev/null; then
-    echo "WARNING: qBittorrent Web API is not reachable at $QBITTORRENT_URL; continuing and relying on the sync loop to retry later." >&2
-fi
+HTTP_STATUS="$(qbt_webui_http_status 5)"
+case "$HTTP_STATUS" in
+    200|204|301|302|303|307|308|401|403)
+        ;;
+    *)
+        echo "WARNING: qBittorrent Web API is not reachable at $QBITTORRENT_URL (HTTP ${HTTP_STATUS:-000}); continuing and relying on the sync loop to retry later." >&2
+        ;;
+esac
 
 COOKIE_JAR="$(mktemp)"
 cleanup() {

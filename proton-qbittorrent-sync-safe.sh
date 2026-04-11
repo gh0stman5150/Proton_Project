@@ -9,6 +9,7 @@ DNAT_CLEANUP_SCRIPT="${DNAT_CLEANUP_SCRIPT:-${SCRIPT_DIR}/proton-qbt-dnat-cleanu
 QBT_COMMON_SCRIPT="${QBT_COMMON_SCRIPT:-${SCRIPT_DIR}/proton-qbittorrent-common.sh}"
 LOG_TAG="${LOG_TAG:-proton-qbt}"
 CACHE_DIR="${CACHE_FILE%/*}"
+DOCKER_CONFIG_DIR="${DOCKER_CONFIG_DIR:-${CACHE_DIR}/docker-config}"
 
 if [[ "$CACHE_DIR" == "$CACHE_FILE" ]]; then
     CACHE_DIR="."
@@ -178,7 +179,13 @@ require_compose_mode_ready() {
 
 recreate_qbt_service_compose() {
     log "Recreating Compose service $QBT_COMPOSE_SERVICE in $QBT_COMPOSE_PROJECT_DIR for published port $PORT"
-    docker compose --project-directory "$QBT_COMPOSE_PROJECT_DIR" up -d --force-recreate --no-deps "$QBT_COMPOSE_SERVICE" >/dev/null
+    ensure_directory "$DOCKER_CONFIG_DIR" 700
+    (
+        cd "$QBT_COMPOSE_PROJECT_DIR"
+        DOCKER_CONFIG="$DOCKER_CONFIG_DIR" \
+            QBT_PUBLISHED_PORT="$PORT" \
+            docker compose up -d --force-recreate --no-deps "$QBT_COMPOSE_SERVICE" >/dev/null
+    )
 
     if ! qbt_wait_for_webui 12 5; then
         log "ERROR: qBittorrent Web UI did not become reachable after recreating $QBT_COMPOSE_SERVICE"

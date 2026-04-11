@@ -123,6 +123,8 @@ When Proton assigns a new forwarded port, the default compose-recreate path must
 7. Keep legacy host-side DNAT support only when `QBT_PORT_APPLY_MODE=legacy-dnat`
 8. Confirm that qBittorrent remains bound only to the intended VPN path
 
+The recommended artifact path is `/etc/proton/qbittorrent-port.env`. In compose-recreate mode the sync script injects `QBT_PUBLISHED_PORT` into `docker compose`, so the service does not need write access to the Compose project tree just to update the published port.
+
 `QBITTORRENT_URL` should point to the host published qBittorrent Web UI endpoint. Host systemd services cannot assume direct reachability to Docker network names unless that path is explicitly published or proxied.
 
 ## Install
@@ -192,6 +194,8 @@ If `/etc/wireguard/proton-pool` contains one or more `*.conf` files, the active 
 The selector stores the active choice in `/run/proton/current-server.env` and tracks cooldowns in `/run/proton/bad-servers.tsv`. It uses hysteresis so the current server is kept unless a replacement is meaningfully better or the current server is degraded.
 
 When `PORT_FORWARD_REQUIRED=on`, the pool also learns which profiles have actually returned a Proton forwarded port. Successful profiles are recorded in `PF_CAPABLE_PROFILES_FILE`, failed profiles can be recorded in `PF_INCAPABLE_PROFILES_FILE`, and once the capable file is non-empty the selector only rotates inside that proven-good set.
+
+The port-forward service must be able to write both `/etc/proton` for the learned PF-capable/incapable lists and the directory containing `QBT_PORT_ENV_FILE` for Compose port-artifact updates.
 
 By default the selector lints each candidate before selection. It rejects configs that contain `PreUp`, `PostUp`, `PreDown`, `PostDown`, or `SaveConfig`, and it expects `DNS` to match `WG_EXPECTED_DNS` unless `WG_LINT_ALLOW_MISSING_DNS=on`.
 

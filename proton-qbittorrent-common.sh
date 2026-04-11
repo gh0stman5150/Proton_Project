@@ -58,6 +58,29 @@ qbt_get_listen_port() {
         | awk -F: '/"listen_port"/ {gsub(/[^0-9]/, "", $2); print $2; exit}'
 }
 
+qbt_webui_http_status() {
+    local max_time="${1:-5}"
+
+    curl -sS -o /dev/null -w '%{http_code}' --max-time "$max_time" \
+        "$QBITTORRENT_URL/api/v2/app/version" || true
+}
+
+qbt_webui_reachable() {
+    local max_time="${1:-5}"
+    local http_status
+
+    http_status="$(qbt_webui_http_status "$max_time")"
+
+    case "$http_status" in
+        200|204|301|302|303|307|308|401|403)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 qbt_wait_for_webui() {
     local max_attempts="${1:-12}"
     local sleep_seconds="${2:-5}"
@@ -66,7 +89,7 @@ qbt_wait_for_webui() {
     : "${QBITTORRENT_URL:?Missing QBITTORRENT_URL}"
 
     for ((attempt = 1; attempt <= max_attempts; attempt++)); do
-        if curl -fsS --max-time 5 "$QBITTORRENT_URL/api/v2/app/version" >/dev/null 2>&1; then
+        if qbt_webui_reachable 5; then
             return 0
         fi
         sleep "$sleep_seconds"

@@ -396,6 +396,85 @@ install_qbittorrent_port_env() {
 
     install -o root -g root -m 0600 "${source_file}" "${target_file}"
 }
+
+path_dirname() {
+    local path="$1"
+
+    if [[ "$path" == */* ]]; then
+        printf '%s\n' "${path%/*}"
+    else
+        printf '.\n'
+    fi
+}
+
+resolve_rw_dir() {
+    local path="$1"
+    local path_dir resolved
+
+    path_dir="$(path_dirname "$path")"
+
+    if [[ -e "$path" ]]; then
+        resolved="$(readlink -f "$path" 2>/dev/null || true)"
+        if [[ -n "$resolved" ]]; then
+            path_dir="$(path_dirname "$resolved")"
+        fi
+    elif [[ -d "$path_dir" ]]; then
+        resolved="$(readlink -f "$path_dir" 2>/dev/null || true)"
+        if [[ -n "$resolved" ]]; then
+            path_dir="$resolved"
+        fi
+    fi
+
+    printf '%s\n' "$path_dir"
+}
+
+install_qbittorrent_rw_dropin() {
+    local service_name="$1"
+    local base_paths="$2"
+    local extra_path="$3"
+    local dropin_dir dropin_file
+
+    dropin_dir="${SYSTEMD_DIR}/${service_name}.d"
+    dropin_file="${dropin_dir}/zz-qbittorrent-port-env.conf"
+
+    if [[ -z "$extra_path" || "$extra_path" == "/run/proton" ]]; then
+        rm -f "$dropin_file"
+        return 0
+    fi
+
+    mkdir -p "$dropin_dir"
+    cat > "$dropin_file" <<EOF
+[Service]
+ReadWritePaths=${base_paths} ${extra_path}
+EOF
+    chown root:root "$dropin_dir" "$dropin_file"
+    chmod 0755 "$dropin_dir"
+    chmod 0644 "$dropin_file"
+}
+
+install_qbittorrent_service_dropins() {
+    local qb_env_file port_env_file port_env_dir
+
+    qb_env_file="${ETC_PROTON_DIR}/qbittorrent.env"
+    port_env_file="/etc/proton/qbittorrent-port.env"
+
+    if [[ -f "$qb_env_file" ]]; then
+        port_env_file="$(awk -F= '/^QBT_PORT_ENV_FILE=/ {print $2; exit}' "$qb_env_file")"
+        port_env_file="${port_env_file:-/etc/proton/qbittorrent-port.env}"
+    fi
+
+    port_env_dir="$(resolve_rw_dir "$port_env_file")"
+
+    install_qbittorrent_rw_dropin \
+        "proton-port-forward.service" \
+        "/run/proton /etc/wireguard/proton-runtime /etc/proton" \
+        "$port_env_dir"
+    install_qbittorrent_rw_dropin \
+        "proton-healthcheck.service" \
+        "/run/proton" \
+        "$port_env_dir"
+}
+
 enable_and_start_services() {
     systemctl daemon-reload
     systemctl enable "${SERVICES[@]}"
@@ -449,7 +528,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-for cmd in awk cat chmod chown find install mkdir mktemp mv rm systemctl; do
+for cmd in awk cat chmod chown find install mkdir mktemp mv readlink rm systemctl; do
     require_command "$cmd"
 done
 
@@ -481,6 +560,7 @@ done
 
 install_qbittorrent_env
 install_qbittorrent_port_env
+install_qbittorrent_service_dropins
 load_common_env
 validate_wireguard_config
 secure_wireguard_config
@@ -492,4 +572,3 @@ log "Installed Proton env files to ${ETC_PROTON_DIR}"
 log "Installed systemd units to ${SYSTEMD_DIR}"
 log "Services enabled and restarted: ${SERVICES[*]}"
 log "If qBittorrent credentials already existed, review any *.new files under ${ETC_PROTON_DIR}"
-

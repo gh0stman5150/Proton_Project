@@ -33,7 +33,7 @@ RestrictRealtime=yes
 RestrictSUIDSGID=yes
 SystemCallArchitectures=native
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
-ReadWritePaths=/run/proton /etc/wireguard/proton-runtime
+ReadWritePaths=/run/proton /etc/wireguard/proton-runtime /etc/proton
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SETPCAP
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_SETPCAP
 
