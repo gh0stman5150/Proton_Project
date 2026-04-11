@@ -136,6 +136,28 @@ EOF
   grep -F 'SELECTED_WG_PROFILE=wg-b' "$SERVER_SELECTION_FILE"
 }
 
+@test "select accepts IPv4-only DNS when IPv6 lint is disabled for the tunnel" {
+  write_pool_config wg-a host-a
+
+  run env \
+    STATE_DIR="$STATE_DIR" \
+    WG_POOL_DIR="$WG_POOL_DIR" \
+    SERVER_SELECTION_FILE="$SERVER_SELECTION_FILE" \
+    BAD_SERVER_FILE="$BAD_SERVER_FILE" \
+    SERVER_RESELECT_FILE="$SERVER_RESELECT_FILE" \
+    PF_CAPABLE_PROFILES_FILE="$PF_CAPABLE_PROFILES_FILE" \
+    PF_INCAPABLE_PROFILES_FILE="$PF_INCAPABLE_PROFILES_FILE" \
+    WG_EXPECTED_DNS="10.2.0.1,2a07:b944::2:1" \
+    WG_IPV6_ENABLED=off \
+    SERVER_POOL_ENABLED="$SERVER_POOL_ENABLED" \
+    SERVER_POOL_STRICT_LINT="$SERVER_POOL_STRICT_LINT" \
+    PORT_FORWARD_REQUIRED=off \
+    bash ./proton-server-manager.sh select
+
+  [ "$status" -eq 0 ]
+  grep -F 'SELECTED_WG_PROFILE=wg-a' "$SERVER_SELECTION_FILE"
+}
+
 @test "mark-capable removes a profile from incapable state and records its port" {
   printf 'wg-a\t1\tnatpmp-timeout\n' > "$PF_INCAPABLE_PROFILES_FILE"
 

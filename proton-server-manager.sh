@@ -20,6 +20,7 @@ PING_COUNT="${PING_COUNT:-1}"
 SERVER_SWITCH_MIN_IMPROVEMENT_MS="${SERVER_SWITCH_MIN_IMPROVEMENT_MS:-10}"
 SERVER_SWITCH_DEGRADED_LATENCY_MS="${SERVER_SWITCH_DEGRADED_LATENCY_MS:-75}"
 SERVER_POOL_STRICT_LINT="${SERVER_POOL_STRICT_LINT:-on}"
+WG_IPV6_ENABLED="${WG_IPV6_ENABLED:-off}"
 WG_EXPECTED_DNS="${WG_EXPECTED_DNS:-10.2.0.1}"
 WG_LINT_ALLOW_MISSING_DNS="${WG_LINT_ALLOW_MISSING_DNS:-off}"
 PORT_FORWARD_REQUIRED="${PORT_FORWARD_REQUIRED:-on}"
@@ -231,6 +232,35 @@ normalize_csv() {
     ' | paste -sd, -
 }
 
+ipv6_enabled() {
+    [[ "$WG_IPV6_ENABLED" =~ ^(1|true|yes|on)$ ]]
+}
+
+normalize_dns_csv() {
+    local keep_ipv6=0
+
+    if ipv6_enabled; then
+        keep_ipv6=1
+    fi
+
+    printf '%s' "$1" | tr ',' '\n' | awk -v keep_ipv6="$keep_ipv6" '
+        {
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", $0)
+            if ($0 == "") {
+                next
+            }
+
+            value = tolower($0)
+            if (!keep_ipv6 && value ~ /:/) {
+                next
+            }
+
+            out = out == "" ? value : out "," value
+        }
+        END { print out }
+    '
+}
+
 strict_lint_enabled() {
     [[ "$SERVER_POOL_STRICT_LINT" =~ ^(1|true|yes|on)$ ]]
 }
@@ -250,8 +280,8 @@ lint_config() {
         return 1
     fi
 
-    dns_value="$(normalize_csv "$(config_dns_value "$config")")"
-    expected_dns="$(normalize_csv "$WG_EXPECTED_DNS")"
+    dns_value="$(normalize_dns_csv "$(config_dns_value "$config")")"
+    expected_dns="$(normalize_dns_csv "$WG_EXPECTED_DNS")"
 
     if [[ -z "$dns_value" ]]; then
         if allow_missing_dns; then

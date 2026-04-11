@@ -20,6 +20,7 @@ SERVER_MANAGER_SCRIPT="${SERVER_MANAGER_SCRIPT:-/usr/local/bin/proton/proton-ser
 SERVER_SELECTION_FILE="${SERVER_SELECTION_FILE:-${STATE_DIR}/current-server.env}"
 RECOVERY_LOCK_FILE="${RECOVERY_LOCK_FILE:-${STATE_DIR}/recovery.lock}"
 WG_POOL_DIR="${WG_POOL_DIR:-/etc/wireguard/proton-pool}"
+PF_CAPABLE_PROFILES_FILE="${PF_CAPABLE_PROFILES_FILE:-/etc/proton/pf-capable-profiles.tsv}"
 CURRENT_WG_PROFILE="$WG_PROFILE"
 
 log() {
@@ -93,6 +94,25 @@ load_selected_server() {
     else
         CURRENT_WG_PROFILE="$WG_PROFILE"
     fi
+}
+
+profile_in_state_file() {
+    local file="$1"
+    local profile="$2"
+
+    [[ -f "$file" ]] || return 1
+
+    awk -F '\t' -v profile="$profile" '
+        $1 == profile { found = 1 }
+        END { exit found ? 0 : 1 }
+    ' "$file"
+}
+
+profile_is_known_capable() {
+    local profile="$1"
+
+    [[ -n "$profile" ]] || return 1
+    profile_in_state_file "$PF_CAPABLE_PROFILES_FILE" "$profile"
 }
 
 get_ip() {
@@ -260,9 +280,13 @@ while true; do
 
         if (( FAILURES >= MAX_FAILURES )); then
             if server_pool_requested && [[ -x "$SERVER_MANAGER_SCRIPT" ]]; then
-                "$SERVER_MANAGER_SCRIPT" mark-incapable "$CURRENT_WG_PROFILE" "natpmp-timeout" >/dev/null 2>&1 || true
+                if profile_is_known_capable "$CURRENT_WG_PROFILE"; then
+                    log "Profile $CURRENT_WG_PROFILE previously forwarded successfully; treating repeated NAT-PMP failures as transient"
+                else
+                    "$SERVER_MANAGER_SCRIPT" mark-incapable "$CURRENT_WG_PROFILE" "natpmp-timeout" >/dev/null 2>&1 || true
+                fi
             fi
-            log "Too many failures -> reconnecting tunnel"
+            log "Too many failures on ${CURRENT_WG_PROFILE:-$WG_PROFILE} -> reconnecting tunnel"
             reconnect
             FAILURES=0
             LAST_IP=""
