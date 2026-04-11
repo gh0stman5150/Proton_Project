@@ -51,6 +51,14 @@ EOF
 
   cat > "$TMPBIN/natpmpc" <<'EOF'
 #!/usr/bin/env bash
+if [[ -n "${SELECTION_REWRITE_FILE:-}" && -n "${SELECTION_REWRITE_PROFILE:-}" && -n "${SELECTION_REWRITE_DONE_FILE:-}" && ! -f "$SELECTION_REWRITE_DONE_FILE" ]]; then
+  cat > "$SELECTION_REWRITE_FILE" <<EOF2
+SELECTED_WG_PROFILE=$SELECTION_REWRITE_PROFILE
+SELECTED_VPN_INTERFACE=$SELECTION_REWRITE_PROFILE
+SELECTED_CONFIG=$SELECTION_REWRITE_PROFILE.conf
+EOF2
+  touch "$SELECTION_REWRITE_DONE_FILE"
+fi
 exit 1
 EOF
   chmod +x "$TMPBIN/natpmpc"
@@ -122,4 +130,33 @@ EOF
   [ "$status" -eq 42 ]
   grep -F 'mark-incapable wg-good natpmp-timeout' "$SERVER_MANAGER_LOG"
   grep -F 'mark-bad wg-good port-forward-failures' "$SERVER_MANAGER_LOG"
+}
+
+@test "reconnect cools down the profile that failed even if selection state changes mid-loop" {
+  printf 'wg-good\t1\t45678\n' > "$PF_CAPABLE_PROFILES_FILE"
+
+  run env \
+    STATE_DIR="$STATE_DIR" \
+    STATE_FILE="$STATE_FILE" \
+    SERVER_SELECTION_FILE="$SERVER_SELECTION_FILE" \
+    RECOVERY_LOCK_FILE="$RECOVERY_LOCK_FILE" \
+    PF_CAPABLE_PROFILES_FILE="$PF_CAPABLE_PROFILES_FILE" \
+    PF_INCAPABLE_PROFILES_FILE="$PF_INCAPABLE_PROFILES_FILE" \
+    WG_POOL_DIR="$WG_POOL_DIR" \
+    SERVER_POOL_ENABLED="$SERVER_POOL_ENABLED" \
+    CHECK_INTERVAL="$CHECK_INTERVAL" \
+    MAX_FAILURES="$MAX_FAILURES" \
+    NATPMP_TIMEOUT_SECONDS="$NATPMP_TIMEOUT_SECONDS" \
+    WG_UP_SCRIPT="$WG_UP_SCRIPT" \
+    SERVER_MANAGER_SCRIPT="$SERVER_MANAGER_SCRIPT" \
+    SERVER_MANAGER_LOG="$SERVER_MANAGER_LOG" \
+    SELECTION_REWRITE_FILE="$SERVER_SELECTION_FILE" \
+    SELECTION_REWRITE_PROFILE=wg-stale \
+    SELECTION_REWRITE_DONE_FILE="$TEST_TMPDIR/selection-rewrite.done" \
+    bash ./proton-port-forward-safe.sh
+
+  [ "$status" -eq 42 ]
+  grep -F 'mark-bad wg-good port-forward-failures' "$SERVER_MANAGER_LOG"
+  run grep -F 'mark-bad wg-stale port-forward-failures' "$SERVER_MANAGER_LOG"
+  [ "$status" -ne 0 ]
 }

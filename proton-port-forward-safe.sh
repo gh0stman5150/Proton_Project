@@ -162,6 +162,8 @@ clear_state() {
 }
 
 reconnect() {
+    local failed_profile="${1:-$CURRENT_WG_PROFILE}"
+
     (
         flock -n 200 || {
             log "Recovery lock busy, skipping reconnect"
@@ -169,10 +171,14 @@ reconnect() {
         }
 
         log "Recycling WireGuard tunnel..."
-        load_selected_server
+
+        if [[ -z "$failed_profile" ]]; then
+            load_selected_server
+            failed_profile="$CURRENT_WG_PROFILE"
+        fi
 
         if server_pool_requested && [[ -x "$SERVER_MANAGER_SCRIPT" ]]; then
-            "$SERVER_MANAGER_SCRIPT" mark-bad "$CURRENT_WG_PROFILE" "port-forward-failures" >/dev/null 2>&1 || true
+            "$SERVER_MANAGER_SCRIPT" mark-bad "$failed_profile" "port-forward-failures" >/dev/null 2>&1 || true
         fi
 
         clear_state
@@ -237,7 +243,7 @@ while true; do
 
     if [[ -z "$IP" ]]; then
         log "No VPN IP, reconnecting..."
-        reconnect
+        reconnect "$CURRENT_WG_PROFILE"
         sleep "$CHECK_INTERVAL"
         continue
     fi
@@ -287,7 +293,7 @@ while true; do
                 fi
             fi
             log "Too many failures on ${CURRENT_WG_PROFILE:-$WG_PROFILE} -> reconnecting tunnel"
-            reconnect
+            reconnect "$CURRENT_WG_PROFILE"
             FAILURES=0
             LAST_IP=""
         fi

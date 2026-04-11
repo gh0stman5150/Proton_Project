@@ -243,7 +243,7 @@ while true; do
     fi
 
     if ((SPEED_BPS < MIN_COMBINED_SPEED_BPS)); then
-        ((LOW_SPEED_COUNT++))
+        LOW_SPEED_COUNT=$((LOW_SPEED_COUNT + 1))
         log "Low throughput detected (${SPEED_BPS} B/s, ${LOW_SPEED_COUNT}/${MAX_LOW_SPEED_CHECKS}, stage ${RECOVERY_STAGE})"
 
         if ((LOW_SPEED_COUNT >= MAX_LOW_SPEED_CHECKS)); then

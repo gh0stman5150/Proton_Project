@@ -140,14 +140,17 @@ sudo ./install-proton-systemd.sh
 
 The installer:
 
-1. Copies the active Proton scripts to `/usr/local/bin/proton`
-2. Copies the systemd unit files to `/etc/systemd/system`
-3. Copies environment templates to `/etc/proton`
-4. Secures the active WireGuard config as `root:root` with mode `600`
-5. Preserves an existing `/etc/proton/qbittorrent.env`
-6. Writes replacement templates to `*.new` files instead of overwriting secrets
-7. Runs `systemctl daemon-reload`
-8. Enables and restarts the Proton services
+1. Stops active Proton services first during a redeploy so old long-running processes do not survive the file copy
+2. Copies the active Proton scripts to `/usr/local/bin/proton`
+3. Copies the systemd unit files to `/etc/systemd/system`
+4. Copies environment templates to `/etc/proton`
+5. Secures the active WireGuard config as `root:root` with mode `600`
+6. Preserves an existing `/etc/proton/qbittorrent.env`
+7. Writes replacement templates to `*.new` files instead of overwriting secrets
+8. Clears stale bad-server cooldowns, port-forward incapable state, runtime selection state, and failed Proton service state before restart
+9. Runs `systemctl daemon-reload`
+10. Enables and restarts the Proton services
+11. Restarts `proton-docker-watch.service` only if it was already enabled
 
 You can also pass qBittorrent credentials during install:
 
@@ -170,6 +173,25 @@ sudo ./install-proton-systemd.sh \
 ```
 
 After the base install, you may optionally enable `proton-docker-watch.service` if your Docker network CIDR or qBittorrent container IP can change over time.
+
+## Upgrade and Redeploy
+
+Re-running `install-proton-systemd.sh` is the preferred way to deploy script updates. The installer now resets stale runtime and selector state before restarting the Proton services so a patched rollout does not keep old cooldowns, old `port-forward incapable` marks, or a failed `proton-healthcheck.service` latched in place.
+
+On a redeploy, the installer also stops active Proton services before replacing the scripts on disk. That avoids leaving an old `proton-port-forward.service`, `proton-healthcheck.service`, or watcher process alive while the new script bundle is being copied into place.
+
+If you deploy files manually instead of using the installer, run the equivalent reset sequence yourself before restarting services:
+
+```bash
+sudo systemctl stop proton-docker-watch.service proton-healthcheck.service proton-port-forward.service proton-wg.service proton-killswitch.service || true
+sudo /usr/local/bin/proton/proton-server-manager.sh reset-incapable
+sudo /usr/local/bin/proton/proton-server-manager.sh reset-bad
+sudo rm -f /run/proton/current-server.env /run/proton/proton-port.state /run/proton/recovery.lock
+sudo systemctl reset-failed proton-docker-watch.service proton-healthcheck.service proton-port-forward.service proton-wg.service proton-killswitch.service
+sudo systemctl restart proton-wg.service proton-port-forward.service proton-healthcheck.service
+```
+
+The manual sequence intentionally preserves `PF_CAPABLE_PROFILES_FILE` so the selector can keep its proven-good port-forward allowlist while relearning only the transient failure state.
 
 ## Runtime State
 

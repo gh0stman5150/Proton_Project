@@ -156,6 +156,15 @@ load_common_env() {
     fi
 }
 
+load_port_forward_env() {
+    local env_file="${ETC_PROTON_DIR}/proton-port-forward.env"
+
+    if [[ -f "$env_file" ]]; then
+        # shellcheck disable=SC1090
+        source "$env_file"
+    fi
+}
+
 validate_wireguard_config() {
     local resolved_profile resolved_config available_configs
 
@@ -475,13 +484,54 @@ install_qbittorrent_service_dropins() {
         "$port_env_dir"
 }
 
+stop_proton_services_for_redeploy() {
+    log "Stopping active Proton services before reinstall/redeploy"
+    systemctl stop "${OPTIONAL_SERVICES[@]}" "${SERVICES[@]}" >/dev/null 2>&1 || true
+}
+
+restart_enabled_optional_services() {
+    local service
+
+    for service in "${OPTIONAL_SERVICES[@]}"; do
+        if systemctl is-enabled --quiet "$service" >/dev/null 2>&1; then
+            systemctl restart "$service"
+        fi
+    done
+}
+
+reset_runtime_state_for_redeploy() {
+    local runtime_state_dir bad_server_file server_selection_file server_reselect_file
+    local recovery_lock_file port_state_file pf_incapable_file
+
+    runtime_state_dir="${STATE_DIR:-/run/proton}"
+    bad_server_file="${BAD_SERVER_FILE:-${runtime_state_dir}/bad-servers.tsv}"
+    server_selection_file="${SERVER_SELECTION_FILE:-${runtime_state_dir}/current-server.env}"
+    server_reselect_file="${SERVER_RESELECT_FILE:-${runtime_state_dir}/reselect-server.flag}"
+    recovery_lock_file="${RECOVERY_LOCK_FILE:-${runtime_state_dir}/recovery.lock}"
+    port_state_file="${STATE_FILE:-${runtime_state_dir}/proton-port.state}"
+    pf_incapable_file="${PF_INCAPABLE_PROFILES_FILE:-${ETC_PROTON_DIR}/pf-incapable-profiles.tsv}"
+
+    log "Resetting stale Proton runtime and failure state before service restart"
+
+    rm -f \
+        "$bad_server_file" \
+        "$server_selection_file" \
+        "$server_reselect_file" \
+        "$recovery_lock_file" \
+        "$port_state_file" \
+        "$pf_incapable_file"
+}
+
 enable_and_start_services() {
     systemctl daemon-reload
     systemctl enable "${SERVICES[@]}"
+    systemctl reset-failed "${OPTIONAL_SERVICES[@]}" "${SERVICES[@]}" >/dev/null 2>&1 || true
+    reset_runtime_state_for_redeploy
     systemctl restart proton-killswitch.service
     systemctl restart proton-wg.service
     systemctl restart proton-port-forward.service
     systemctl restart proton-healthcheck.service
+    restart_enabled_optional_services
 }
 
 ensure_root
@@ -533,6 +583,7 @@ for cmd in awk cat chmod chown find install mkdir mktemp mv readlink rm systemct
 done
 
 validate_bundle
+stop_proton_services_for_redeploy
 
 mkdir -p "$BIN_DIR" "$ETC_PROTON_DIR" "$SYSTEMD_DIR" "$WG_POOL_DIR"
 mkdir -p "$WG_RUNTIME_DIR"
@@ -562,6 +613,7 @@ install_qbittorrent_env
 install_qbittorrent_port_env
 install_qbittorrent_service_dropins
 load_common_env
+load_port_forward_env
 validate_wireguard_config
 secure_wireguard_config
 
@@ -570,5 +622,6 @@ enable_and_start_services
 log "Installed Proton scripts to ${BIN_DIR}"
 log "Installed Proton env files to ${ETC_PROTON_DIR}"
 log "Installed systemd units to ${SYSTEMD_DIR}"
+log "Cleared stale bad/incapable/runtime state before restarting Proton services"
 log "Services enabled and restarted: ${SERVICES[*]}"
 log "If qBittorrent credentials already existed, review any *.new files under ${ETC_PROTON_DIR}"
