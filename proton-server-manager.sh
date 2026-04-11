@@ -538,7 +538,7 @@ select_best_server() {
         fi
     done < <(candidate_configs)
 
-    if [[ -z "$best_profile" && port_forward_allowlist_active && "$allow_unproven" != "1" ]]; then
+    if [[ -z "$best_profile" && "$allow_unproven" != "1" ]] && port_forward_allowlist_active; then
         log "No eligible proven-good port-forward candidates were available; retrying with unproven nodes"
         select_best_server "$allow_bad" 1
         return $?
