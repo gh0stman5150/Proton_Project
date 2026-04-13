@@ -116,7 +116,6 @@ profile_is_known_capable() {
 }
 
 get_ip() {
-    load_selected_server
     ip -4 addr show "$VPN_INTERFACE" 2>/dev/null \
         | awk '/inet / {print $2}' | cut -d/ -f1 || true
 }
@@ -200,6 +199,7 @@ FAILURES=0
 load_selected_server
 
 if [[ "$MODE" == "once" ]]; then
+    load_selected_server
     IP="$(get_ip)"
 
     if [[ -z "$IP" ]]; then
@@ -243,6 +243,7 @@ if [[ "$MODE" == "once" ]]; then
 fi
 
 while true; do
+    load_selected_server
     IP="$(get_ip)"
 
     if [[ -z "$IP" ]]; then

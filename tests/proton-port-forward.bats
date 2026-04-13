@@ -81,6 +81,13 @@ EOF
 exit 42
 EOF
   chmod +x "$WG_UP_SCRIPT"
+
+  export QBITTORRENT_SYNC_SCRIPT="$TEST_TMPDIR/qb-sync.sh"
+  cat > "$QBITTORRENT_SYNC_SCRIPT" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+  chmod +x "$QBITTORRENT_SYNC_SCRIPT"
 }
 
 @test "proven port-forward profiles are cooled down instead of marked incapable after repeated failures" {
@@ -158,5 +165,77 @@ EOF
   [ "$status" -eq 42 ]
   grep -F 'mark-bad wg-good port-forward-failures' "$SERVER_MANAGER_LOG"
   run grep -F 'mark-bad wg-stale port-forward-failures' "$SERVER_MANAGER_LOG"
+  [ "$status" -ne 0 ]
+}
+
+@test "post-reconnect port-forward success is attributed to the newly selected profile" {
+  cat > "$SERVER_SELECTION_FILE" <<EOF
+SELECTED_WG_PROFILE=wg-old
+SELECTED_VPN_INTERFACE=wg-old
+SELECTED_CONFIG=$TEST_TMPDIR/wg-old.conf
+EOF
+
+  printf 'wg-old\t1\t45678\n' > "$PF_CAPABLE_PROFILES_FILE"
+
+  cat > "$TMPBIN/natpmpc" <<'EOF'
+#!/usr/bin/env bash
+if [[ -f "${RECONNECTED_MARKER:-}" ]]; then
+  if [[ "${4:-}" == "udp" ]]; then
+    exit 0
+  fi
+  if [[ "${4:-}" == "tcp" ]]; then
+    printf 'Mapped public port 45678 protocol tcp\n'
+    exit 0
+  fi
+fi
+
+exit 1
+EOF
+  chmod +x "$TMPBIN/natpmpc"
+
+  cat > "$WG_UP_SCRIPT" <<'EOF'
+#!/usr/bin/env bash
+cat > "$SERVER_SELECTION_FILE" <<EOF2
+SELECTED_WG_PROFILE=wg-new
+SELECTED_VPN_INTERFACE=wg-new
+SELECTED_CONFIG=$TEST_TMPDIR/wg-new.conf
+EOF2
+touch "$RECONNECTED_MARKER"
+exit 0
+EOF
+  chmod +x "$WG_UP_SCRIPT"
+
+  cat > "$QBITTORRENT_SYNC_SCRIPT" <<'EOF'
+#!/usr/bin/env bash
+kill -TERM "$PPID"
+sleep 1
+exit 0
+EOF
+  chmod +x "$QBITTORRENT_SYNC_SCRIPT"
+
+  run env \
+    STATE_DIR="$STATE_DIR" \
+    STATE_FILE="$STATE_FILE" \
+    SERVER_SELECTION_FILE="$SERVER_SELECTION_FILE" \
+    RECOVERY_LOCK_FILE="$RECOVERY_LOCK_FILE" \
+    PF_CAPABLE_PROFILES_FILE="$PF_CAPABLE_PROFILES_FILE" \
+    PF_INCAPABLE_PROFILES_FILE="$PF_INCAPABLE_PROFILES_FILE" \
+    WG_POOL_DIR="$WG_POOL_DIR" \
+    SERVER_POOL_ENABLED="$SERVER_POOL_ENABLED" \
+    CHECK_INTERVAL=0 \
+    MAX_FAILURES="$MAX_FAILURES" \
+    NATPMP_TIMEOUT_SECONDS="$NATPMP_TIMEOUT_SECONDS" \
+    WG_UP_SCRIPT="$WG_UP_SCRIPT" \
+    QBITTORRENT_SYNC_SCRIPT="$QBITTORRENT_SYNC_SCRIPT" \
+    SERVER_MANAGER_SCRIPT="$SERVER_MANAGER_SCRIPT" \
+    SERVER_MANAGER_LOG="$SERVER_MANAGER_LOG" \
+    RECONNECTED_MARKER="$TEST_TMPDIR/reconnected" \
+    TEST_TMPDIR="$TEST_TMPDIR" \
+    bash ./proton-port-forward-safe.sh
+
+  [ "$status" -eq 143 ]
+  grep -F 'mark-bad wg-old port-forward-failures' "$SERVER_MANAGER_LOG"
+  grep -F 'mark-capable wg-new 45678' "$SERVER_MANAGER_LOG"
+  run grep -F 'mark-capable wg-old 45678' "$SERVER_MANAGER_LOG"
   [ "$status" -ne 0 ]
 }
