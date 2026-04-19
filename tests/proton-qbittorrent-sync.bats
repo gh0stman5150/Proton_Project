@@ -101,6 +101,28 @@ EOF
 #!/usr/bin/env bash
 printf 'PWD=%s DOCKER_CONFIG=%s QBT_PUBLISHED_PORT=%s CMD=%s\n' "$PWD" "${DOCKER_CONFIG:-}" "${QBT_PUBLISHED_PORT:-}" "$*" >> "$DOCKER_LOG"
 if [[ "$1" == 'compose' ]]; then
+  counter_file="${DOCKER_LOG}.compose-${QBT_PUBLISHED_PORT:-unset}.count"
+  attempt=0
+  if [[ -f "$counter_file" ]]; then
+    attempt="$(cat "$counter_file")"
+  fi
+  attempt=$((attempt + 1))
+  printf '%s' "$attempt" > "$counter_file"
+
+  if [[ "${QBT_TEST_COMPOSE_FAIL_PORT:-}" == "${QBT_PUBLISHED_PORT:-}" ]]; then
+    case "${QBT_TEST_COMPOSE_FAIL_MODE:-always}" in
+      once)
+        if [[ "$attempt" -eq 1 ]]; then
+          printf '%s\n' "Error response from daemon: failed to bind host port 0.0.0.0:${QBT_PUBLISHED_PORT}/tcp: address already in use" >&2
+          exit 1
+        fi
+        ;;
+      always)
+        printf '%s\n' "Error response from daemon: failed to bind host port 0.0.0.0:${QBT_PUBLISHED_PORT}/tcp: address already in use" >&2
+        exit 1
+        ;;
+    esac
+  fi
   exit 0
 fi
 if [[ "$1" == 'restart' ]]; then
@@ -174,6 +196,31 @@ EOF
   grep -F "DOCKER_CONFIG=$DOCKER_CONFIG_DIR" "$DOCKER_LOG"
   grep -F 'QBT_PUBLISHED_PORT=40001' "$DOCKER_LOG"
   grep -F 'CMD=compose up -d --force-recreate --no-deps qbittorrent' "$DOCKER_LOG"
+}
+
+@test "compose-recreate mode retries a busy host port before succeeding" {
+  write_qbt_env compose-recreate
+  echo 'CURRENT_PORT=40001' > "$STATE_FILE"
+  echo 'QBT_PUBLISHED_PORT=30000' > "$PORT_ENV_FILE"
+  printf '30000' > "$CURL_STATE"
+
+  run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" QBT_TEST_COMPOSE_FAIL_PORT=40001 QBT_TEST_COMPOSE_FAIL_MODE=once QBT_COMPOSE_RECREATE_RETRIES=2 QBT_COMPOSE_RECREATE_RETRY_DELAY=0 bash ./proton-qbittorrent-sync-safe.sh
+  [ "$status" -eq 0 ]
+  [[ "$(grep -c 'QBT_PUBLISHED_PORT=40001' "$DOCKER_LOG")" -eq 2 ]]
+  grep -F 'QBT_PUBLISHED_PORT=40001' "$PORT_ENV_FILE"
+}
+
+@test "compose-recreate mode restores the previous published port after repeated bind failures" {
+  write_qbt_env compose-recreate
+  echo 'CURRENT_PORT=40001' > "$STATE_FILE"
+  echo 'QBT_PUBLISHED_PORT=30000' > "$PORT_ENV_FILE"
+  printf '30000' > "$CURL_STATE"
+
+  run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" QBT_TEST_COMPOSE_FAIL_PORT=40001 QBT_TEST_COMPOSE_FAIL_MODE=always QBT_COMPOSE_RECREATE_RETRIES=2 QBT_COMPOSE_RECREATE_RETRY_DELAY=0 bash ./proton-qbittorrent-sync-safe.sh
+  [ "$status" -eq 1 ]
+  grep -F 'QBT_PUBLISHED_PORT=30000' "$PORT_ENV_FILE"
+  grep -F 'QBT_PUBLISHED_PORT=30000' "$DOCKER_LOG"
+  [[ "$(cat "$CURL_STATE")" == "30000" ]]
 }
 
 @test "compose-recreate mode skips when another sync instance already holds the lock" {

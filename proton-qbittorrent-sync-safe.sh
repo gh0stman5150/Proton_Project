@@ -62,6 +62,8 @@ QBT_PORT_ENV_FILE="${QBT_PORT_ENV_FILE:-/etc/proton/qbittorrent-port.env}"
 QBT_COMPOSE_PROJECT_DIR="${QBT_COMPOSE_PROJECT_DIR:-}"
 QBT_COMPOSE_SERVICE="${QBT_COMPOSE_SERVICE:-qbittorrent}"
 QBT_SYNC_LOCK_FILE="${QBT_SYNC_LOCK_FILE:-${CACHE_DIR}/qbt-sync.lock}"
+QBT_COMPOSE_RECREATE_RETRIES="${QBT_COMPOSE_RECREATE_RETRIES:-3}"
+QBT_COMPOSE_RECREATE_RETRY_DELAY="${QBT_COMPOSE_RECREATE_RETRY_DELAY:-5}"
 
 case "$QBT_PORT_APPLY_MODE" in
 compose-recreate | legacy-dnat)
@@ -101,6 +103,16 @@ if [[ ! "$QBT_INTERNAL_PORT" =~ ^[0-9]+$ ]]; then
     exit 1
 fi
 
+if [[ ! "$QBT_COMPOSE_RECREATE_RETRIES" =~ ^[0-9]+$ ]] || (( QBT_COMPOSE_RECREATE_RETRIES < 1 )); then
+    log "ERROR: Invalid QBT_COMPOSE_RECREATE_RETRIES value: $QBT_COMPOSE_RECREATE_RETRIES"
+    exit 1
+fi
+
+if [[ ! "$QBT_COMPOSE_RECREATE_RETRY_DELAY" =~ ^[0-9]+$ ]]; then
+    log "ERROR: Invalid QBT_COMPOSE_RECREATE_RETRY_DELAY value: $QBT_COMPOSE_RECREATE_RETRY_DELAY"
+    exit 1
+fi
+
 COOKIE_JAR="$(mktemp)"
 cleanup() {
     rm -f "$COOKIE_JAR"
@@ -110,6 +122,13 @@ trap cleanup EXIT
 write_cache() {
     umask 077
     echo "$PORT" > "$CACHE_FILE"
+}
+
+write_cache_value() {
+    local value="$1"
+
+    umask 077
+    echo "$value" > "$CACHE_FILE"
 }
 
 read_published_port() {
@@ -143,29 +162,40 @@ disable_random_port() {
         "$QBITTORRENT_URL/api/v2/app/setPreferences" >/dev/null
 }
 
-set_qbt_listen_port() {
+set_qbt_listen_port_value() {
+    local target_port="$1"
+
     curl -fsS -b "$COOKIE_JAR" -X POST \
-        --data "json={\"listen_port\":$PORT}" \
+        --data "json={\"listen_port\":$target_port}" \
         "$QBITTORRENT_URL/api/v2/app/setPreferences" >/dev/null
 }
 
-apply_qbt_listen_port() {
+ensure_qbt_listen_port_value() {
+    local target_port="$1"
     local applied_port
 
+    applied_port="$(qbt_get_listen_port "$COOKIE_JAR" || true)"
+    if [[ "$applied_port" == "$target_port" ]]; then
+        return 0
+    fi
+
+    log "Updating qBittorrent listen port -> $target_port"
+    disable_random_port
+    set_qbt_listen_port_value "$target_port"
+
+    applied_port="$(qbt_get_listen_port "$COOKIE_JAR" || true)"
+    if [[ "$applied_port" != "$target_port" ]]; then
+        log "ERROR: qBittorrent did not apply port $target_port (reported: ${applied_port:-unknown})"
+        exit 1
+    fi
+}
+
+apply_qbt_listen_port() {
     if [[ "$CURRENT_QBT_PORT" == "$PORT" ]]; then
         return 0
     fi
 
-    log "Updating qBittorrent listen port -> $PORT"
-    disable_random_port
-    set_qbt_listen_port
-
-    applied_port="$(qbt_get_listen_port "$COOKIE_JAR" || true)"
-    if [[ "$applied_port" != "$PORT" ]]; then
-        log "ERROR: qBittorrent did not apply port $PORT (reported: ${applied_port:-unknown})"
-        exit 1
-    fi
-
+    ensure_qbt_listen_port_value "$PORT"
     LISTEN_PORT_CHANGED=1
 }
 
@@ -188,15 +218,55 @@ require_compose_mode_ready() {
     fi
 }
 
+run_compose_recreate() {
+    local target_port="$1"
+    local attempt=1
+    local exit_code=0
+    local output_file
+
+    output_file="$(mktemp)"
+    while (( attempt <= QBT_COMPOSE_RECREATE_RETRIES )); do
+        if (
+            cd "$QBT_COMPOSE_PROJECT_DIR"
+            DOCKER_CONFIG="$DOCKER_CONFIG_DIR" \
+                QBT_PUBLISHED_PORT="$target_port" \
+                docker compose up -d --force-recreate --no-deps "$QBT_COMPOSE_SERVICE"
+        ) >"$output_file" 2>&1; then
+            if [[ -s "$output_file" ]]; then
+                cat "$output_file"
+            fi
+            rm -f "$output_file"
+            return 0
+        fi
+
+        exit_code=$?
+        if [[ -s "$output_file" ]]; then
+            cat "$output_file"
+        fi
+
+        if (( attempt < QBT_COMPOSE_RECREATE_RETRIES )) && grep -F "address already in use" "$output_file" >/dev/null 2>&1; then
+            log "Compose recreate hit a busy host port for $target_port (attempt $attempt/$QBT_COMPOSE_RECREATE_RETRIES); retrying in ${QBT_COMPOSE_RECREATE_RETRY_DELAY}s"
+            sleep "$QBT_COMPOSE_RECREATE_RETRY_DELAY"
+            attempt=$((attempt + 1))
+            continue
+        fi
+
+        rm -f "$output_file"
+        return "$exit_code"
+    done
+
+    rm -f "$output_file"
+    return "$exit_code"
+}
+
 recreate_qbt_service_compose() {
-    log "Recreating Compose service $QBT_COMPOSE_SERVICE in $QBT_COMPOSE_PROJECT_DIR for published port $PORT"
+    local target_port="$1"
+
+    log "Recreating Compose service $QBT_COMPOSE_SERVICE in $QBT_COMPOSE_PROJECT_DIR for published port $target_port"
     ensure_directory "$DOCKER_CONFIG_DIR" 700
-    (
-        cd "$QBT_COMPOSE_PROJECT_DIR"
-        DOCKER_CONFIG="$DOCKER_CONFIG_DIR" \
-            QBT_PUBLISHED_PORT="$PORT" \
-            docker compose up -d --force-recreate --no-deps "$QBT_COMPOSE_SERVICE" >/dev/null
-    )
+    if ! run_compose_recreate "$target_port"; then
+        return 1
+    fi
 
     if ! qbt_wait_for_webui 12 5; then
         log "ERROR: qBittorrent Web UI did not become reachable after recreating $QBT_COMPOSE_SERVICE"
@@ -208,7 +278,7 @@ recreate_qbt_service_compose() {
         return 1
     fi
 
-    if [[ "$(qbt_get_listen_port "$COOKIE_JAR" || true)" != "$PORT" ]]; then
+    if ! ensure_qbt_listen_port_value "$target_port"; then
         log "ERROR: qBittorrent reported a different port after recreating $QBT_COMPOSE_SERVICE"
         return 1
     fi
@@ -342,15 +412,31 @@ apply_qbt_listen_port
 case "$QBT_PORT_APPLY_MODE" in
 compose-recreate)
     if [[ "$CURRENT_PUBLISHED_PORT" != "$PORT" ]]; then
+        rollback_port=""
+
         require_compose_mode_ready || exit 1
         log "Updating qBittorrent published port artifact -> $PORT"
+        rollback_port="$CURRENT_PUBLISHED_PORT"
         write_published_port
         PUBLISHED_PORT_CHANGED=1
-        if ! recreate_qbt_service_compose; then
-            if [[ -n "$CURRENT_PUBLISHED_PORT" ]]; then
-                write_published_port_value "$CURRENT_PUBLISHED_PORT"
+        if ! recreate_qbt_service_compose "$PORT"; then
+            if [[ -n "$rollback_port" ]]; then
+                log "Restoring qBittorrent published port artifact -> $rollback_port"
+                write_published_port_value "$rollback_port"
+                if recreate_qbt_service_compose "$rollback_port"; then
+                    log "Restored qBittorrent service on previous published port $rollback_port after failed recreate for $PORT"
+                else
+                    log "ERROR: Failed to restore qBittorrent service on previous published port $rollback_port"
+                fi
             else
+                log "Removing qBittorrent published port artifact after failed recreate for $PORT"
                 rm -f "$QBT_PORT_ENV_FILE"
+            fi
+
+            if [[ -n "$rollback_port" ]]; then
+                write_cache_value "$rollback_port"
+            else
+                rm -f "$CACHE_FILE"
             fi
             exit 1
         fi
@@ -369,9 +455,9 @@ write_cache
 if (( PUBLISHED_PORT_CHANGED )); then
     log "qBittorrent updated successfully with Compose recreation"
 elif (( LISTEN_PORT_CHANGED )); then
-    log "qBittorrent listen port corrected without published-port changes"
+    log "qBittorrent updated successfully"
 elif (( DNAT_CHANGED )); then
-    log "qBittorrent legacy DNAT refreshed successfully"
+    log "qBittorrent DNAT refreshed successfully"
 else
     log "qBittorrent already using port $PORT"
 fi
