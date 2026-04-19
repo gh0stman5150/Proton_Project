@@ -40,13 +40,32 @@ EOF
 
   cat > "$TMPBIN/curl" <<'EOF'
 #!/usr/bin/env bash
+output_file=""
+for ((i = 1; i <= $#; i++)); do
+  if [[ "${!i}" == "-o" ]]; then
+    next_index=$((i + 1))
+    output_file="${!next_index}"
+  fi
+done
+
+write_body() {
+  if [[ -n "$output_file" ]]; then
+    printf '%s' "$1" > "$output_file"
+  else
+    printf '%s' "$1"
+  fi
+}
+
 printf '%s\n' "$*" >> "$CURL_LOG"
 case "$*" in
   *'/api/v2/auth/login'*)
-    echo 'Ok.'
+    write_body 'Ok.'
+    if [[ "$*" == *'%{http_code}'* ]]; then
+      printf '200'
+    fi
     ;;
   *'/api/v2/app/preferences'*)
-    printf '{"listen_port":%s}\n' "$(cat "$CURL_STATE")"
+    write_body "{\"listen_port\":$(cat "$CURL_STATE")}"
     ;;
   *'/api/v2/app/setPreferences'*)
     for arg in "$@"; do
@@ -56,6 +75,9 @@ case "$*" in
     done
     ;;
   *'/api/v2/app/version'*)
+    if [[ "$*" == *'%{http_code}'* ]]; then
+      printf '200'
+    fi
     ;;
   *)
     echo "unexpected curl invocation: $*" >&2
@@ -65,6 +87,15 @@ esac
 exit 0
 EOF
   chmod +x "$TMPBIN/curl"
+
+  cat > "$TMPBIN/flock" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${QBT_TEST_FLOCK_FAIL:-}" == "1" ]]; then
+  exit 1
+fi
+exit 0
+EOF
+  chmod +x "$TMPBIN/flock"
 
   cat > "$TMPBIN/docker" <<'EOF'
 #!/usr/bin/env bash
@@ -143,6 +174,18 @@ EOF
   grep -F "DOCKER_CONFIG=$DOCKER_CONFIG_DIR" "$DOCKER_LOG"
   grep -F 'QBT_PUBLISHED_PORT=40001' "$DOCKER_LOG"
   grep -F 'CMD=compose up -d --force-recreate --no-deps qbittorrent' "$DOCKER_LOG"
+}
+
+@test "compose-recreate mode skips when another sync instance already holds the lock" {
+  write_qbt_env compose-recreate
+  echo 'CURRENT_PORT=40001' > "$STATE_FILE"
+  echo 'QBT_PUBLISHED_PORT=30000' > "$PORT_ENV_FILE"
+  printf '30000' > "$CURL_STATE"
+
+  run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" QBT_TEST_FLOCK_FAIL=1 bash ./proton-qbittorrent-sync-safe.sh
+  [ "$status" -eq 0 ]
+  [ ! -s "$DOCKER_LOG" ]
+  grep -F 'QBT_PUBLISHED_PORT=30000' "$PORT_ENV_FILE"
 }
 
 @test "legacy-dnat mode refreshes nft DNAT rules without invoking docker compose" {

@@ -25,6 +25,10 @@ qbt_webui_http_status() {
 }
 
 qbt_login() {
+  if [[ -n "${QBT_TEST_LOGIN_ERROR:-}" ]]; then
+    QBT_LOGIN_ERROR="$QBT_TEST_LOGIN_ERROR"
+    return 1
+  fi
   return 0
 }
 EOF
@@ -92,6 +96,7 @@ EOF
     QBITTORRENT_ENV_FILE="$QBITTORRENT_ENV_FILE" \
     QBT_COMMON_SCRIPT="$QBT_COMMON_SCRIPT" \
     PORT_FORWARD_SCRIPT="$TEST_TMPDIR/port-forward-once.sh" \
+    RECOVERY_LOCK_FILE="$TEST_TMPDIR/recovery.lock" \
     CHECK_INTERVAL=60 \
     MIN_COMBINED_SPEED_BPS=65536 \
     MAX_LOW_SPEED_CHECKS=1 \
@@ -99,4 +104,16 @@ EOF
 
   [ "$status" -eq 42 ]
   [[ "$output" == *"Recovery action 'NAT-PMP refresh' failed with exit 7"* ]]
+}
+
+@test "healthcheck logs the shared qB login diagnostic when the Web UI is unreachable" {
+  run env \
+    QBITTORRENT_ENV_FILE="$QBITTORRENT_ENV_FILE" \
+    QBT_COMMON_SCRIPT="$QBT_COMMON_SCRIPT" \
+    QBT_TEST_LOGIN_ERROR="qBittorrent Web UI unreachable at http://qb.test:8080" \
+    CHECK_INTERVAL=60 \
+    bash ./proton-healthcheck.sh
+
+  [ "$status" -eq 42 ]
+  [[ "$output" == *"qBittorrent Web UI unreachable at http://qb.test:8080; retrying later"* ]]
 }

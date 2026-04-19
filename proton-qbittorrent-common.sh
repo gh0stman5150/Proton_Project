@@ -31,22 +31,62 @@ qbt_source_env_file() {
     fi
 }
 
+QBT_LOGIN_ERROR=""
+QBT_LOGIN_HTTP_STATUS=""
+
 qbt_login() {
     local cookie_jar="$1"
     local login_body
+    local http_status curl_exit curl_error
+    local response_file error_file
 
     : "${QBITTORRENT_URL:?Missing QBITTORRENT_URL}"
     : "${QBITTORRENT_USER:?Missing QBITTORRENT_USER}"
     : "${QBITTORRENT_PASS:?Missing QBITTORRENT_PASS}"
 
+    QBT_LOGIN_ERROR=""
+    QBT_LOGIN_HTTP_STATUS=""
+
     : > "$cookie_jar"
-    login_body="$(curl -fsS \
+    response_file="$(mktemp)"
+    error_file="$(mktemp)"
+
+    http_status="$(curl -sS \
+        -o "$response_file" \
+        -w '%{http_code}' \
         -c "$cookie_jar" \
         --data-urlencode "username=$QBITTORRENT_USER" \
         --data-urlencode "password=$QBITTORRENT_PASS" \
-        "$QBITTORRENT_URL/api/v2/auth/login" || true)"
+        "$QBITTORRENT_URL/api/v2/auth/login" 2>"$error_file")"
+    curl_exit=$?
+    login_body="$(cat "$response_file" 2>/dev/null || true)"
 
-    [[ "$login_body" == "Ok." ]]
+    rm -f "$response_file"
+
+    if [[ "$curl_exit" -ne 0 ]]; then
+        curl_error="$(tr '\n' ' ' < "$error_file")"
+        rm -f "$error_file"
+        if [[ -n "$curl_error" ]]; then
+            QBT_LOGIN_ERROR="qBittorrent Web UI unreachable at $QBITTORRENT_URL (${curl_error})"
+        else
+            QBT_LOGIN_ERROR="qBittorrent Web UI unreachable at $QBITTORRENT_URL (curl exit $curl_exit)"
+        fi
+        return 1
+    fi
+
+    rm -f "$error_file"
+    QBT_LOGIN_HTTP_STATUS="${http_status:-000}"
+
+    if [[ "$login_body" != "Ok." ]]; then
+        if [[ -n "$login_body" ]]; then
+            QBT_LOGIN_ERROR="qBittorrent rejected login at $QBITTORRENT_URL (HTTP ${QBT_LOGIN_HTTP_STATUS}: ${login_body})"
+        else
+            QBT_LOGIN_ERROR="qBittorrent rejected login at $QBITTORRENT_URL (HTTP ${QBT_LOGIN_HTTP_STATUS})"
+        fi
+        return 1
+    fi
+
+    return 0
 }
 
 qbt_get_listen_port() {

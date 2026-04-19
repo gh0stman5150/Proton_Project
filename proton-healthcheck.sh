@@ -223,7 +223,11 @@ log "Starting throughput healthcheck loop..."
 while true; do
     if ! qbt_login "$COOKIE_JAR"; then
         reset_recovery_state
-        log "qBittorrent login failed during healthcheck; retrying later"
+        if [[ -n "${QBT_LOGIN_ERROR:-}" ]]; then
+            log "${QBT_LOGIN_ERROR}; retrying later"
+        else
+            log "qBittorrent login failed during healthcheck; retrying later"
+        fi
         sleep "$CHECK_INTERVAL"
         continue
     fi

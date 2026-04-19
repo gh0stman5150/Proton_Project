@@ -28,7 +28,7 @@ require_command() {
     fi
 }
 
-for cmd in awk chmod curl mkdir mktemp rm sleep stat systemd-cat tr; do
+for cmd in awk chmod curl flock mkdir mktemp rm sleep stat systemd-cat tr; do
     require_command "$cmd"
 done
 
@@ -61,6 +61,7 @@ QBT_PORT_APPLY_MODE="${QBT_PORT_APPLY_MODE:-compose-recreate}"
 QBT_PORT_ENV_FILE="${QBT_PORT_ENV_FILE:-/etc/proton/qbittorrent-port.env}"
 QBT_COMPOSE_PROJECT_DIR="${QBT_COMPOSE_PROJECT_DIR:-}"
 QBT_COMPOSE_SERVICE="${QBT_COMPOSE_SERVICE:-qbittorrent}"
+QBT_SYNC_LOCK_FILE="${QBT_SYNC_LOCK_FILE:-${CACHE_DIR}/qbt-sync.lock}"
 
 case "$QBT_PORT_APPLY_MODE" in
 compose-recreate | legacy-dnat)
@@ -72,6 +73,16 @@ compose-recreate | legacy-dnat)
 esac
 
 ensure_directory "$CACHE_DIR" 700
+
+acquire_sync_lock() {
+    exec 200>"$QBT_SYNC_LOCK_FILE"
+    if ! flock -n 200; then
+        log "Another qBittorrent sync is already running; skipping"
+        exit 0
+    fi
+}
+
+acquire_sync_lock
 
 PORT="$(awk -F= '/^CURRENT_PORT=/ {print $2; exit}' "$STATE_FILE" 2>/dev/null || true)"
 
@@ -193,7 +204,7 @@ recreate_qbt_service_compose() {
     fi
 
     if ! qbt_login "$COOKIE_JAR"; then
-        log "ERROR: Authentication failed after recreating $QBT_COMPOSE_SERVICE"
+        log "ERROR: ${QBT_LOGIN_ERROR:-qBittorrent login failed after recreating $QBT_COMPOSE_SERVICE}"
         return 1
     fi
 
@@ -220,7 +231,7 @@ restart_qbt_container_legacy() {
     fi
 
     if ! qbt_login "$COOKIE_JAR"; then
-        log "ERROR: Authentication failed after restarting $QBT_CONTAINER_NAME"
+        log "ERROR: ${QBT_LOGIN_ERROR:-qBittorrent login failed after restarting $QBT_CONTAINER_NAME}"
         return 1
     fi
 
@@ -311,7 +322,7 @@ refresh_qbt_dnat_legacy() {
 }
 
 if ! qbt_login "$COOKIE_JAR"; then
-    log "ERROR: Authentication failed"
+    log "ERROR: ${QBT_LOGIN_ERROR:-qBittorrent login failed}"
     exit 1
 fi
 
