@@ -12,6 +12,7 @@ QBITTORRENT_SYNC_SCRIPT="${QBITTORRENT_SYNC_SCRIPT:-/usr/local/bin/proton/proton
 PORT_FORWARD_SCRIPT="${PORT_FORWARD_SCRIPT:-/usr/local/bin/proton/proton-port-forward-safe.sh}"
 SERVER_MANAGER_SCRIPT="${SERVER_MANAGER_SCRIPT:-/usr/local/bin/proton/proton-server-manager.sh}"
 QBT_COMMON_SCRIPT="${QBT_COMMON_SCRIPT:-${SCRIPT_DIR}/proton-qbittorrent-common.sh}"
+PORT_STABILITY_GRACE_SECONDS="${PORT_STABILITY_GRACE_SECONDS:-180}"
 
 log() {
     local message
@@ -33,7 +34,7 @@ require_command() {
     fi
 }
 
-for cmd in awk curl flock grep mktemp rm stat systemctl tr; do
+for cmd in awk curl date flock grep mktemp rm stat systemctl tr; do
     require_command "$cmd"
 done
 
@@ -104,6 +105,27 @@ has_current_port_state() {
         }
         END { exit found ? 0 : 1 }
     ' "$STATE_FILE"
+}
+
+current_port_state_age_seconds() {
+    local mtime now
+
+    [[ -f "$STATE_FILE" ]] || return 1
+
+    mtime="$(stat -c '%Y' "$STATE_FILE" 2>/dev/null || true)"
+    [[ -n "$mtime" ]] || return 1
+
+    now="$(date +%s)"
+    printf '%s\n' "$((now - mtime))"
+}
+
+port_state_recently_changed() {
+    local age_seconds
+
+    ((PORT_STABILITY_GRACE_SECONDS > 0)) || return 1
+
+    age_seconds="$(current_port_state_age_seconds)" || return 1
+    ((age_seconds < PORT_STABILITY_GRACE_SECONDS))
 }
 
 with_recovery_lock() {
@@ -233,6 +255,15 @@ while true; do
     fi
 
     if ! has_active_transfers; then
+        reset_recovery_state
+        sleep "$CHECK_INTERVAL"
+        continue
+    fi
+
+    # Give qBittorrent and the tunnel a short settling period after each
+    # forwarded-port change so reconnect churn does not immediately trigger
+    # another recovery cycle.
+    if port_state_recently_changed; then
         reset_recovery_state
         sleep "$CHECK_INTERVAL"
         continue

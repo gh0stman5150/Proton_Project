@@ -237,9 +237,10 @@ run_compose_recreate() {
             fi
             rm -f "$output_file"
             return 0
+        else
+            exit_code=$?
         fi
 
-        exit_code=$?
         if [[ -s "$output_file" ]]; then
             cat "$output_file"
         fi

@@ -141,10 +141,21 @@ extract_port() {
 }
 
 save_state() {
+    local new_port="$1"
+    local new_ip="$2"
+    local current_port current_ip
+
+    current_port="$(load_state_port)"
+    current_ip="$(load_state_ip)"
+
+    if [[ "$current_port" == "$new_port" && "$current_ip" == "$new_ip" ]]; then
+        return 0
+    fi
+
     umask 077
     {
-        echo "CURRENT_PORT=$1"
-        echo "CURRENT_IP=$2"
+        echo "CURRENT_PORT=$new_port"
+        echo "CURRENT_IP=$new_ip"
     } > "$STATE_FILE"
 }
 

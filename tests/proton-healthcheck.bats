@@ -65,11 +65,63 @@ cat -
 EOF
   chmod +x "$TMPBIN/systemd-cat"
 
+  cat > "$TEST_TMPDIR/qb-sync.sh" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+  chmod +x "$TEST_TMPDIR/qb-sync.sh"
+
   cat > "$TMPBIN/sleep" <<'EOF'
 #!/usr/bin/env bash
 exit 42
 EOF
   chmod +x "$TMPBIN/sleep"
+}
+
+@test "recent forwarded-port changes suppress low-throughput recovery" {
+  cat > "$TEST_TMPDIR/proton-port.state" <<'EOF'
+CURRENT_PORT=45678
+CURRENT_IP=10.2.0.2
+EOF
+
+  run env \
+    QBITTORRENT_ENV_FILE="$QBITTORRENT_ENV_FILE" \
+    QBT_COMMON_SCRIPT="$QBT_COMMON_SCRIPT" \
+    STATE_FILE="$TEST_TMPDIR/proton-port.state" \
+    RECOVERY_LOCK_FILE="$TEST_TMPDIR/recovery.lock" \
+    PORT_STABILITY_GRACE_SECONDS=300 \
+    CHECK_INTERVAL=60 \
+    MIN_COMBINED_SPEED_BPS=65536 \
+    MAX_LOW_SPEED_CHECKS=1 \
+    bash ./proton-healthcheck.sh
+
+  [ "$status" -eq 42 ]
+  [[ "$output" != *"Low throughput detected"* ]]
+  [[ "$output" != *"Throughput stayed below threshold"* ]]
+}
+
+@test "stable forwarded-port state still allows low-throughput recovery" {
+  cat > "$TEST_TMPDIR/proton-port.state" <<'EOF'
+CURRENT_PORT=45678
+CURRENT_IP=10.2.0.2
+EOF
+  touch -d '10 minutes ago' "$TEST_TMPDIR/proton-port.state"
+
+  run env \
+    QBITTORRENT_ENV_FILE="$QBITTORRENT_ENV_FILE" \
+    QBT_COMMON_SCRIPT="$QBT_COMMON_SCRIPT" \
+    STATE_FILE="$TEST_TMPDIR/proton-port.state" \
+    RECOVERY_LOCK_FILE="$TEST_TMPDIR/recovery.lock" \
+    QBITTORRENT_SYNC_SCRIPT="$TEST_TMPDIR/qb-sync.sh" \
+    PORT_STABILITY_GRACE_SECONDS=300 \
+    CHECK_INTERVAL=60 \
+    MIN_COMBINED_SPEED_BPS=65536 \
+    MAX_LOW_SPEED_CHECKS=1 \
+    bash ./proton-healthcheck.sh
+
+  [ "$status" -eq 42 ]
+  [[ "$output" == *"Low throughput detected"* ]]
+  [[ "$output" == *"refreshing qBittorrent port state"* ]]
 }
 
 @test "low throughput no longer exits immediately on first increment" {

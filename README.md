@@ -327,6 +327,12 @@ Default thresholds:
 1. `CHECK_INTERVAL=60`
 2. `MIN_COMBINED_SPEED_BPS=65536` which is 64 KB/s
 3. `MAX_LOW_SPEED_CHECKS=3`
+4. `PORT_STABILITY_GRACE_SECONDS=180`
+
+The healthcheck also pauses its low-throughput recovery ladder for a short
+stabilization window after each forwarded-port update so normal NAT-PMP churn
+and qBittorrent port reconfiguration do not immediately trigger another round
+of recovery.
 
 Tune those values in `proton-healthcheck.service` if the workload is bursty or often idle between peer activity.
 
