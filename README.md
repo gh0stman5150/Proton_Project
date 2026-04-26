@@ -147,10 +147,11 @@ The installer:
 5. Secures the active WireGuard config as `root:root` with mode `600`
 6. Preserves an existing `/etc/proton/qbittorrent.env`
 7. Writes replacement templates to `*.new` files instead of overwriting secrets
-8. Clears stale bad-server cooldowns, port-forward incapable state, runtime selection state, and failed Proton service state before restart
-9. Runs `systemctl daemon-reload`
-10. Enables and restarts the Proton services
-11. Restarts `proton-docker-watch.service` only if it was already enabled
+8. Installs units that have systemd recreate `/run/proton` before applying sandboxed writable paths
+9. Clears stale bad-server cooldowns, port-forward incapable state, runtime selection state, and failed Proton service state before restart
+10. Runs `systemctl daemon-reload`
+11. Enables and restarts the Proton services
+12. Restarts `proton-docker-watch.service` only if it was already enabled
 
 You can also pass qBittorrent credentials during install:
 
