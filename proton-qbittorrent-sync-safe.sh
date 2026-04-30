@@ -218,6 +218,86 @@ require_compose_mode_ready() {
     fi
 }
 
+compose_container_ref() {
+    local container_id
+
+    if [[ -n "${QBT_CONTAINER_NAME:-}" ]] && docker inspect "$QBT_CONTAINER_NAME" >/dev/null 2>&1; then
+        printf '%s\n' "$QBT_CONTAINER_NAME"
+        return 0
+    fi
+
+    container_id="$(
+        cd "$QBT_COMPOSE_PROJECT_DIR"
+        DOCKER_CONFIG="$DOCKER_CONFIG_DIR" docker compose ps -q "$QBT_COMPOSE_SERVICE" 2>/dev/null \
+            | awk 'NF { last = $0 } END { print last }'
+    )"
+
+    [[ -n "$container_id" ]] || return 1
+    printf '%s\n' "$container_id"
+}
+
+compose_published_ports() {
+    local container_ref
+
+    container_ref="$(compose_container_ref)" || return 1
+    docker inspect -f '{{range $containerPort, $bindings := .NetworkSettings.Ports}}{{if $bindings}}{{range $bindings}}{{printf "%s %s\n" $containerPort .HostPort}}{{end}}{{end}}{{end}}' "$container_ref" 2>/dev/null || true
+}
+
+compose_published_ports_summary() {
+    local ports
+
+    ports="$(compose_published_ports || true)"
+    if [[ -z "$ports" ]]; then
+        printf 'none'
+        return 0
+    fi
+
+    awk '
+        {
+            printf "%s%s->%s", sep, $1, $2
+            sep = ", "
+        }
+        END {
+            print ""
+        }
+    ' <<< "$ports"
+}
+
+compose_current_published_port() {
+    local ports
+
+    ports="$(compose_published_ports || true)"
+    [[ -n "$ports" ]] || return 1
+
+    awk '
+        $1 ~ /\/tcp$/ && $2 ~ /^[0-9]+$/ { tcp[$2] = 1 }
+        $1 ~ /\/udp$/ && $2 ~ /^[0-9]+$/ { udp[$2] = 1 }
+        END {
+            for (port in tcp) {
+                if (udp[port]) {
+                    print port
+                    exit
+                }
+            }
+            exit 1
+        }
+    ' <<< "$ports"
+}
+
+compose_service_publishes_port() {
+    local target_port="$1"
+    local ports
+
+    ports="$(compose_published_ports || true)"
+    [[ -n "$ports" ]] || return 1
+
+    awk -v target_port="$target_port" '
+        $1 ~ /\/tcp$/ && $2 == target_port { tcp = 1 }
+        $1 ~ /\/udp$/ && $2 == target_port { udp = 1 }
+        END { exit (tcp && udp) ? 0 : 1 }
+    ' <<< "$ports"
+}
+
 run_compose_recreate() {
     local target_port="$1"
     local attempt=1
@@ -281,6 +361,11 @@ recreate_qbt_service_compose() {
 
     if ! ensure_qbt_listen_port_value "$target_port"; then
         log "ERROR: qBittorrent reported a different port after recreating $QBT_COMPOSE_SERVICE"
+        return 1
+    fi
+
+    if ! compose_service_publishes_port "$target_port"; then
+        log "ERROR: Docker did not publish qBittorrent TCP/UDP port $target_port after recreating $QBT_COMPOSE_SERVICE (actual: $(compose_published_ports_summary))"
         return 1
     fi
 }
@@ -412,12 +497,24 @@ apply_qbt_listen_port
 
 case "$QBT_PORT_APPLY_MODE" in
 compose-recreate)
-    if [[ "$CURRENT_PUBLISHED_PORT" != "$PORT" ]]; then
+    require_compose_mode_ready || exit 1
+    CURRENT_DOCKER_PUBLISHED_PORT="$(compose_current_published_port || true)"
+    COMPOSE_PORTS_MATCH=0
+    if compose_service_publishes_port "$PORT"; then
+        COMPOSE_PORTS_MATCH=1
+    fi
+
+    if [[ "$CURRENT_PUBLISHED_PORT" != "$PORT" ]] || (( ! COMPOSE_PORTS_MATCH )); then
         rollback_port=""
 
-        require_compose_mode_ready || exit 1
-        log "Updating qBittorrent published port artifact -> $PORT"
-        rollback_port="$CURRENT_PUBLISHED_PORT"
+        if [[ "$CURRENT_PUBLISHED_PORT" != "$PORT" ]]; then
+            log "Updating qBittorrent published port artifact -> $PORT"
+            rollback_port="$CURRENT_PUBLISHED_PORT"
+        else
+            log "Docker published ports are stale for qBittorrent; expected TCP/UDP $PORT, actual: $(compose_published_ports_summary)"
+            rollback_port="$CURRENT_DOCKER_PUBLISHED_PORT"
+        fi
+
         write_published_port
         PUBLISHED_PORT_CHANGED=1
         if ! recreate_qbt_service_compose "$PORT"; then

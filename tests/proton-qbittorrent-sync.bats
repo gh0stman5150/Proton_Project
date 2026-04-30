@@ -12,6 +12,7 @@ setup() {
   export PORT_ENV_FILE="$TEST_TMPDIR/qbittorrent-port.env"
   export CURL_STATE="$TEST_TMPDIR/current-qbt-port"
   export DOCKER_LOG="$TEST_TMPDIR/docker.log"
+  export DOCKER_PORT_FILE="$TEST_TMPDIR/docker-published-port"
   export NFT_LOG="$TEST_TMPDIR/nft.log"
   export CURL_LOG="$TEST_TMPDIR/curl.log"
   export PROJECT_DIR="$TEST_TMPDIR/project"
@@ -100,7 +101,26 @@ EOF
   cat > "$TMPBIN/docker" <<'EOF'
 #!/usr/bin/env bash
 printf 'PWD=%s DOCKER_CONFIG=%s QBT_PUBLISHED_PORT=%s CMD=%s\n' "$PWD" "${DOCKER_CONFIG:-}" "${QBT_PUBLISHED_PORT:-}" "$*" >> "$DOCKER_LOG"
+current_published_port() {
+  local port="${QBT_TEST_DOCKER_PUBLISHED_PORT:-}"
+
+  if [[ -z "$port" && -n "${DOCKER_PORT_FILE:-}" && -f "$DOCKER_PORT_FILE" ]]; then
+    port="$(cat "$DOCKER_PORT_FILE")"
+  fi
+
+  if [[ -z "$port" && -n "${PORT_ENV_FILE:-}" && -f "$PORT_ENV_FILE" ]]; then
+    port="$(awk -F= '/^QBT_PUBLISHED_PORT=/ {print $2; exit}' "$PORT_ENV_FILE" 2>/dev/null || true)"
+  fi
+
+  printf '%s\n' "${port:-6881}"
+}
+
 if [[ "$1" == 'compose' ]]; then
+  if [[ "$2" == 'ps' ]]; then
+    echo 'qbittorrent'
+    exit 0
+  fi
+
   counter_file="${DOCKER_LOG}.compose-${QBT_PUBLISHED_PORT:-unset}.count"
   attempt=0
   if [[ -f "$counter_file" ]]; then
@@ -123,6 +143,10 @@ if [[ "$1" == 'compose' ]]; then
         ;;
     esac
   fi
+
+  if [[ -n "${DOCKER_PORT_FILE:-}" && -n "${QBT_PUBLISHED_PORT:-}" ]]; then
+    printf '%s' "$QBT_PUBLISHED_PORT" > "$DOCKER_PORT_FILE"
+  fi
   exit 0
 fi
 if [[ "$1" == 'restart' ]]; then
@@ -131,6 +155,17 @@ fi
 if [[ "$1" == 'inspect' && "$2" == '-f' ]]; then
   if [[ "$3" == '{{.HostConfig.NetworkMode}}' ]]; then
     echo 'bridge'
+    exit 0
+  fi
+  if [[ "$3" == *'.NetworkSettings.Ports'* ]]; then
+    port="$(current_published_port)"
+    printf '%s/tcp %s\n' "$port" "$port"
+    printf '%s/udp %s\n' "$port" "$port"
+    printf '8081/tcp 8081\n'
+    exit 0
+  fi
+  if [[ "$3" == *'.NetworkSettings.Networks'* ]]; then
+    echo 'starr=172.18.0.10'
     exit 0
   fi
   echo 'starr=172.18.0.10'
@@ -179,8 +214,22 @@ EOF
 
   run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" bash ./proton-qbittorrent-sync-safe.sh
   [ "$status" -eq 0 ]
-  [ ! -s "$DOCKER_LOG" ]
+  ! grep -F 'CMD=compose up ' "$DOCKER_LOG"
   grep -F 'QBT_PUBLISHED_PORT=40000' "$PORT_ENV_FILE"
+}
+
+@test "compose-recreate mode recreates when artifact matches but Docker still publishes the old port" {
+  write_qbt_env compose-recreate
+  echo 'CURRENT_PORT=40001' > "$STATE_FILE"
+  echo 'QBT_PUBLISHED_PORT=40001' > "$PORT_ENV_FILE"
+  printf '40001' > "$CURL_STATE"
+  printf '30000' > "$DOCKER_PORT_FILE"
+
+  run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" bash ./proton-qbittorrent-sync-safe.sh
+  [ "$status" -eq 0 ]
+  grep -F 'QBT_PUBLISHED_PORT=40001' "$PORT_ENV_FILE"
+  grep -F 'CMD=compose up -d --force-recreate --no-deps qbittorrent' "$DOCKER_LOG"
+  [[ "$(cat "$DOCKER_PORT_FILE")" == "40001" ]]
 }
 
 @test "compose-recreate mode updates the published-port artifact and recreates the service on port change" {
