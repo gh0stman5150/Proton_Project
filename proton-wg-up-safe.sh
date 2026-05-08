@@ -550,9 +550,19 @@ inject_routes() {
 
 inject_routes
 
-sleep 5
+# Wait for an IPv4 address on the VPN interface instead of a fixed sleep.
+# Configurable timeout (seconds).
+WG_UP_WAIT_SECONDS="${WG_UP_WAIT_SECONDS:-30}"
 
-IP="$(ip -4 addr show "$VPN_INTERFACE" | awk '/inet / {print $2}' | cut -d/ -f1 || true)"
+log "Waiting up to ${WG_UP_WAIT_SECONDS}s for an IPv4 address on $VPN_INTERFACE"
+IP=""
+for _i in $(seq 1 "$WG_UP_WAIT_SECONDS"); do
+	IP="$(ip -4 addr show "$VPN_INTERFACE" 2>/dev/null | awk '/inet / {print $2}' | cut -d/ -f1 || true)"
+	if [[ -n "$IP" ]]; then
+		break
+	fi
+	sleep 1
+done
 
 if [[ -z "$IP" ]]; then
 	log "ERROR: $VPN_INTERFACE came up without an IPv4 address"
