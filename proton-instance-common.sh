@@ -57,8 +57,7 @@ proton_require_secure_real_env_file() {
 	local mode owner
 
 	case "$env_file" in
-	/etc/proton/*)
-		;;
+	/etc/proton/*) ;;
 	*)
 		return 0
 		;;
@@ -152,7 +151,7 @@ proton_rebase_legacy_runtime_paths() {
 proton_apply_tunnel_subnet() {
 	[[ -n "${WG_ADDRESS_SUBNET:-}" ]] || return 0
 
-	if [[ ! "$WG_ADDRESS_SUBNET" =~ ^[0-9]+$ ]] || (( WG_ADDRESS_SUBNET < 1 || WG_ADDRESS_SUBNET > 254 )); then
+	if [[ ! "$WG_ADDRESS_SUBNET" =~ ^[0-9]+$ ]] || ((WG_ADDRESS_SUBNET < 1 || WG_ADDRESS_SUBNET > 254)); then
 		proton_instance_error "Invalid WG_ADDRESS_SUBNET '$WG_ADDRESS_SUBNET' (expected an integer 1-254)."
 	fi
 

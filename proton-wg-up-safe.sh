@@ -85,7 +85,7 @@ ensure_directory() {
 		created=1
 	fi
 
-	if (( created )) && [[ -n "$mode" ]]; then
+	if ((created)) && [[ -n "$mode" ]]; then
 		chmod "$mode" "$dir"
 	fi
 }
@@ -220,7 +220,6 @@ load_selected_server() {
 		# Adopt only the source server config (peer/keys). Keep WG_PROFILE and
 		# VPN_INTERFACE as the per-instance values from proton.env so the local
 		# interface name and runtime config path never collide across instances.
-		SELECTED_SERVER_PROFILE="${SELECTED_WG_PROFILE:-}"
 		WG_CONFIG="${SELECTED_CONFIG:-$WG_CONFIG}"
 		FILTERED_CONFIG_PATH="${WG_RUNTIME_DIR}/${WG_PROFILE}.conf"
 	fi

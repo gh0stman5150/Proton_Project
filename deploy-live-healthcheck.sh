@@ -11,9 +11,9 @@ echo "Deployed proton-healthcheck.sh to $LIVE_DIR"
 
 INSTANCES=(lidarr radarr sonarr whisparr prowlarr)
 for instance in "${INSTANCES[@]}"; do
-    svc="proton-healthcheck@${instance}.service"
-    if systemctl is-active --quiet "$svc" 2>/dev/null; then
-        systemctl restart "$svc"
-        echo "Restarted $svc"
-    fi
+	svc="proton-healthcheck@${instance}.service"
+	if systemctl is-active --quiet "$svc" 2>/dev/null; then
+		systemctl restart "$svc"
+		echo "Restarted $svc"
+	fi
 done
