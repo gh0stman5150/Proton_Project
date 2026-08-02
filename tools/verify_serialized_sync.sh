@@ -50,7 +50,7 @@ for inst in "${INSTANCES[@]}"; do
 	fi
 
 	state_file="${STATE_DIR}/${inst}/proton-port.state"
-	for i in $(seq 1 20); do
+	for ((wait_try = 0; wait_try < 20; wait_try++)); do
 		if [[ -f "$state_file" ]]; then
 			break
 		fi
@@ -64,7 +64,9 @@ for inst in "${INSTANCES[@]}"; do
 		continue
 	fi
 
+	# shellcheck disable=SC2016
 	PORT="$($ELEVATE awk -F= '/^CURRENT_PORT=/ {print $2; exit}' "$state_file" 2>/dev/null || echo "")"
+	# shellcheck disable=SC2016
 	IP="$($ELEVATE awk -F= '/^CURRENT_IP=/ {print $2; exit}' "$state_file" 2>/dev/null || echo "")"
 	echo "STATE: PORT=${PORT:-(empty)} IP=${IP:-(empty)}"
 
@@ -99,6 +101,7 @@ for inst in "${INSTANCES[@]}"; do
 	inst_qb_env="/etc/proton/instances/$inst/qbittorrent.env"
 	qbt_port_env="/etc/proton/qbittorrent-port.env"
 	if [[ -f "$inst_qb_env" ]]; then
+		# shellcheck disable=SC2016
 		val="$($ELEVATE awk -F= '/^QBT_PORT_ENV_FILE=/ {print $2; exit}' "$inst_qb_env" 2>/dev/null || echo "")"
 		if [[ -n "$val" ]]; then
 			qbt_port_env="$val"
@@ -106,6 +109,7 @@ for inst in "${INSTANCES[@]}"; do
 	fi
 
 	if [[ -f "$qbt_port_env" ]]; then
+		# shellcheck disable=SC2016
 		pub="$($ELEVATE awk -F= '/^QBT_PUBLISHED_PORT=/ {print $2; exit}' "$qbt_port_env" 2>/dev/null || echo "")"
 		echo "$qbt_port_env: QBT_PUBLISHED_PORT=${pub:-(empty)}"
 		if [[ "$pub" == "$PORT" ]]; then

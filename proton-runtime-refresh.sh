@@ -19,14 +19,14 @@ for inst in "${instances[@]}"; do
 	systemctl restart "proton-wg@${inst}" || true
 	sleep 2
 	echo "--- /run/proton/$inst/current-server.env ---"
-	sed -n '1,120p' /run/proton/$inst/current-server.env 2>/dev/null || true
-	sel="$(awk -F= '/^SELECTED_WG_PROFILE=/ {print $2; exit}' /run/proton/$inst/current-server.env 2>/dev/null || true)"
+	sed -n '1,120p' "/run/proton/$inst/current-server.env" 2>/dev/null || true
+	sel="$(awk -F= '/^SELECTED_WG_PROFILE=/ {print $2; exit}' "/run/proton/$inst/current-server.env" 2>/dev/null || true)"
 	if [[ -n "$sel" ]]; then
 		echo "--- /etc/wireguard/proton-runtime/${sel}.conf ---"
 		sed -n '1,160p' "/etc/wireguard/proton-runtime/${sel}.conf" 2>/dev/null || true
 	fi
 	echo "--- /run/proton/$inst/proton-port.state ---"
-	sed -n '1,80p' /run/proton/$inst/proton-port.state 2>/dev/null || true
+	sed -n '1,80p' "/run/proton/$inst/proton-port.state" 2>/dev/null || true
 	echo
 done
 

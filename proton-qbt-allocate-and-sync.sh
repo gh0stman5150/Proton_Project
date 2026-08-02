@@ -26,7 +26,7 @@ systemctl start proton-port-forward@"$INSTANCE" || true
 # Wait for the per-instance state file to appear
 STATE_FILE="/run/proton/$INSTANCE/proton-port.state"
 WAIT_TRIES="${WAIT_TRIES:-40}"
-for i in $(seq 1 "$WAIT_TRIES"); do
+for ((wait_try = 0; wait_try < WAIT_TRIES; wait_try++)); do
 	if [[ -f "$STATE_FILE" ]]; then
 		break
 	fi

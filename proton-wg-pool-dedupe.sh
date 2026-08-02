@@ -57,8 +57,8 @@ done
 awk -F"\t" '{ key=$1 "|" $2; files[key]=files[key] " " $3; count[key]++ } END { for (k in count) if (count[k]>1) print k "\t" files[k] }' "$TMPMAP" >"$DUPLIST" || true
 
 moved_count=0
-while IFS=$'\t' read -r key files_line; do
-	files_line="$(echo "$files_line" | sed -e 's/^ //')"
+while IFS=$'\t' read -r _ files_line; do
+	files_line="${files_line# }"
 	# split into array
 	read -r -a filearr <<<"$files_line"
 	# choose keeper: prefer currently-selected profile if present

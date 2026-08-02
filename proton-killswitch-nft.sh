@@ -249,6 +249,7 @@ render_lan_to_docker_rules() {
 # a single VPN_IF. Falls back to VPN_IF when no WireGuard interface is up yet.
 vpn_interfaces() {
 	local ifaces=""
+	local iface_list=()
 
 	if command -v wg >/dev/null 2>&1; then
 		ifaces="$(wg show interfaces 2>/dev/null || true)"
@@ -258,7 +259,8 @@ vpn_interfaces() {
 		ifaces="$VPN_IF"
 	fi
 
-	printf '%s\n' $ifaces
+	read -r -a iface_list <<<"$ifaces"
+	printf '%s\n' "${iface_list[@]}"
 }
 
 render_vpn_to_docker_rules() {

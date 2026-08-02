@@ -31,8 +31,8 @@ qbt_source_env_file() {
 	fi
 }
 
-QBT_LOGIN_ERROR=""
-QBT_LOGIN_HTTP_STATUS=""
+export QBT_LOGIN_ERROR=""
+export QBT_LOGIN_HTTP_STATUS=""
 
 qbt_login() {
 	local cookie_jar="$1"
@@ -92,8 +92,6 @@ qbt_login() {
 	fi
 
 	return 1
-
-	return 0
 }
 
 qbt_get_listen_port() {
