@@ -40,26 +40,26 @@ cleanup_nft() {
 }
 
 case "$KILLSWITCH_BACKEND" in
-	iptables)
-		cleanup_iptables
-		;;
-	nft|nftables)
+iptables)
+	cleanup_iptables
+	;;
+nft | nftables)
+	cleanup_nft
+	;;
+auto)
+	if command -v nft >/dev/null 2>&1; then
 		cleanup_nft
-		;;
-	auto)
-		if command -v nft >/dev/null 2>&1; then
-			cleanup_nft
-		elif command -v iptables >/dev/null 2>&1; then
-			cleanup_iptables
-		else
-			# Best-effort on systems without either tool
-			cleanup_nft || true
-			cleanup_iptables || true
-		fi
-		;;
-	*)
-		# Unknown value: best-effort cleanup for both backends
+	elif command -v iptables >/dev/null 2>&1; then
+		cleanup_iptables
+	else
+		# Best-effort on systems without either tool
 		cleanup_nft || true
 		cleanup_iptables || true
-		;;
+	fi
+	;;
+*)
+	# Unknown value: best-effort cleanup for both backends
+	cleanup_nft || true
+	cleanup_iptables || true
+	;;
 esac

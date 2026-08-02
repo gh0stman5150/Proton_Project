@@ -85,7 +85,7 @@ ensure_directory() {
 		created=1
 	fi
 
-	if (( created )) && [[ -n "$mode" ]]; then
+	if ((created)) && [[ -n "$mode" ]]; then
 		chmod "$mode" "$dir"
 	fi
 }
