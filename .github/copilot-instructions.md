@@ -95,12 +95,30 @@ If `/archive` is absent or empty, say so explicitly and proceed without archive-
 
 1. Detect Proton forwarded port changes automatically
 2. Update the qBittorrent listening port automatically
-3. Update the Docker Compose value or the file that feeds it
+3. Store the last applied mapping in `/etc/proton/instances/<instance>/qbittorrent-port.env` as exactly one assignment, `QBT_PUBLISHED_PORT=<port>`; never write `QBT_FORWARDED_PORT` and never write a dynamic port to the Compose project `.env`
 4. Because the published port mapping cannot change while the container is running, stop and recreate the qBittorrent container after the port value changes
 5. Verify the new port after restart
 6. Confirm qBittorrent is bound only to the intended VPN path
-7. In compose-recreate mode, self-heal may recreate qBittorrent when the Web UI is unreachable, but it must not keep recreating when Docker still reports the named container as running with no published ports. That state indicates a wedged container or namespace/shim problem; the script must refuse normal Compose self-heal and require cgroup or containerd-shim cleanup first.
+7. In compose-recreate mode, self-heal may recreate qBittorrent when the Web UI is unreachable, but it must refuse normal Compose work if the named container has lost its published ports, contains a zombie, or contains an uninterruptible `D`-state task
 8. A refused self-heal must preserve the existing published-port artifact so runtime state does not drift while the wedged container still owns the Docker name.
+9. Treat confirmed `D` state after a netfs/CIFS kernel fault as a host-kernel recovery boundary. Preserve evidence and require an approved host reboot; do not prescribe repeated signals, `cgroup.kill`, shim killing, forced removal, or Compose recreation as a repair.
+10. A Proton lease change recreates only the qBittorrent service that owns that tunnel. Never copy one instance's port to another instance.
+11. An unchanged lease normally does not recreate the container. A fleet structural change may set the documented force-recreate flag and must roll all five instances sequentially with health gates.
+
+## qBittorrent Fleet Consistency
+
+1. The managed instances are `lidarr`, `prowlarr`, `radarr`, `sonarr`, and `whisparr`.
+2. `qbittorrent-compose.common.yml` is the single source for shared image, environment, volume, health-check, restart, shutdown, and network policy.
+3. Each `/opt/qbittorrent-<instance>/docker-compose.yml` must remain a thin instance wrapper that extends the installed common service.
+4. `qbittorrent-instances.tsv` is the canonical instance identity catalog. Do not repeat instance metadata in case statements or unscoped tests.
+5. Every `/opt/qbittorrent-<instance>/.env` must contain exactly one assignment: its `QBT_HOST_BIND_IP`.
+6. The allowed wrapper differences are service/container identity, Web UI port, bind IP, and instance-local config/init paths. Torrent ports have no Compose fallback and must be injected from the matching live Proton lease.
+7. A change to shared Compose policy, image, init hook, storage strategy, synchronization code, route logic, kill switch, allocator, watcher, or fleet-controlled qBittorrent preference must be applied and verified on all five instances.
+8. Dynamic leases, tunnel identities, runtime state, credentials, paths/categories, and documented role overrides remain per-instance.
+9. Do not normalize qBittorrent by copying an entire `qBittorrent.conf`; classify common keys and explicit role overrides first.
+10. A shared rollout must preflight the complete fleet, refuse before the first mutation if any member is absent/unhealthy/zombie/`D` state, recreate sequentially, and run the full runtime verifier at the end.
+11. All shared policy-route mutations must use one host-global route lock. Both firewall backends must use one host-global kill-switch lock. These locks must not derive from an instance `STATE_DIR`.
+12. No systemd `ExecStart` may target the source checkout. Installed entrypoints live under `/usr/local/bin/proton` and must be executable.
 
 ## DNS Rules
 
@@ -176,6 +194,8 @@ Include commands and steps to validate:
 9. VPN reconnect handling
 10. kill switch activation and recovery
 11. qBittorrent wedged-container guard behavior, including that self-heal refuses normal Compose recreation when a running container has no published ports
+12. zombie and uninterruptible `D`-state refusal behavior
+13. the one-key port artifact and all-five static/runtime fleet verification
 
 ### 6. Security Notes
 

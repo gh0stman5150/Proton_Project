@@ -8,6 +8,7 @@ DOCKER_NETWORK_CIDR6="${DOCKER_NETWORK_CIDR6:-}"
 DOCKER_FORWARD_CHAIN="${DOCKER_FORWARD_CHAIN:-PROTON_DOCKER_FORWARD}"
 NAT_CHAIN="${NAT_CHAIN:-PROTON_POSTROUTING}"
 STATE_DIR="${STATE_DIR:-/run/proton}"
+KILLSWITCH_LOCK_FILE="${KILLSWITCH_LOCK_FILE:-/run/proton/killswitch.lock}"
 DOCKER_NETWORK_CIDR_STATE_FILE="${DOCKER_NETWORK_CIDR_STATE_FILE:-${STATE_DIR}/docker-network-cidr}"
 SERVER_SELECTION_FILE="${SERVER_SELECTION_FILE:-${STATE_DIR}/current-server.env}"
 SERVER_RESELECT_FILE="${SERVER_RESELECT_FILE:-${STATE_DIR}/reselect-server.flag}"
@@ -48,7 +49,7 @@ require_command() {
 	fi
 }
 
-for cmd in awk cat chmod ip iptables mkdir systemd-cat tr; do
+for cmd in awk cat chmod flock ip iptables mkdir systemd-cat tr; do
 	require_command "$cmd"
 done
 
@@ -68,6 +69,13 @@ ensure_directory() {
 }
 
 ensure_directory "$STATE_DIR" 700
+ensure_directory "${KILLSWITCH_LOCK_FILE%/*}" 700
+
+exec 9>"$KILLSWITCH_LOCK_FILE"
+if ! flock -w 30 9; then
+	log "ERROR: Timed out waiting for kill-switch lock: $KILLSWITCH_LOCK_FILE"
+	exit 1
+fi
 
 if [[ -z "$DOCKER_NETWORK_CIDR" && -f "$DOCKER_NETWORK_CIDR_STATE_FILE" ]]; then
 	DOCKER_NETWORK_CIDR="$(cat "$DOCKER_NETWORK_CIDR_STATE_FILE" 2>/dev/null || true)"

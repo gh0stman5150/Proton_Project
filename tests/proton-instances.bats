@@ -19,10 +19,10 @@ QBITTORRENT_ENV_FILE=/etc/proton/qbittorrent.env
 EOF
 
   create_instance lidarr 8081 pvlidarr
-  create_instance radarr 8082 pvradarr
-  create_instance sonarr 8083 pvsonarr
-  create_instance whisparr 8084 pvwhisp
-  create_instance prowlarr 8085 pvprowl
+  create_instance radarr 8083 pvradarr
+  create_instance sonarr 8084 pvsonarr
+  create_instance whisparr 8085 pvwhisparr
+  create_instance prowlarr 8082 pvprowlarr
 }
 
 create_instance() {
@@ -90,11 +90,11 @@ EOF
   run bash -c 'source ./proton-instance-common.sh; proton_instance_init prowlarr; printf "%s\n%s\n%s\n%s\n" "$INSTANCE" "$VPN_INTERFACE" "$STATE_DIR" "$QBITTORRENT_URL"'
   [ "$status" -eq 0 ]
   [[ "$output" == *"prowlarr"* ]]
-  [[ "$output" == *"pvprowl"* ]]
+  [[ "$output" == *"pvprowlarr"* ]]
   [[ "$output" == *"/run/proton/prowlarr"* ]]
-  [[ "$output" == *"http://127.0.0.1:8085"* ]]
+  [[ "$output" == *"http://127.0.0.1:8082"* ]]
   [[ "$output" != *"sonarr"* ]]
-  [[ "$output" != *"8083"* ]]
+  [[ "$output" != *"8084"* ]]
 }
 
 @test "legacy runtime paths are rebased per instance" {
@@ -144,8 +144,9 @@ EOF
   [[ "$output" == *"Instance qBittorrent env not found"* ]]
 }
 
-@test "generated port artifacts carry published and forwarded port values" {
+@test "generated port artifacts have one authoritative published-port value" {
   grep -Fq 'QBT_PUBLISHED_PORT=6881' proton-qbittorrent-port.env
-  grep -Fq 'QBT_FORWARDED_PORT=6881' proton-qbittorrent-port.env
-  grep -Fq 'QBT_FORWARDED_PORT=$value' proton-qbittorrent-sync-safe.sh
+  ! grep -Fq 'QBT_FORWARDED_PORT=' proton-qbittorrent-port.env
+  ! grep -Fq 'QBT_FORWARDED_PORT=' proton-qbittorrent-sync-safe.sh
+  [ "$(awk -F= '/^[A-Za-z_][A-Za-z0-9_]*=/ { count++ } END { print count + 0 }' proton-qbittorrent-port.env)" -eq 1 ]
 }

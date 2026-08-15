@@ -1,0 +1,6 @@
+# instance	webui_port	legacy_reference_port	bind_ip	vpn_interface	address_subnet	vpn_table	qbt_rule_priority
+lidarr	8081	51058	10.2.0.2	pvlidarr	2	51802	112
+prowlarr	8082	51057	10.6.0.2	pvprowlarr	6	51806	116
+radarr	8083	51056	10.3.0.2	pvradarr	3	51803	113
+sonarr	8084	51055	10.4.0.2	pvsonarr	4	51804	114
+whisparr	8085	51054	10.5.0.2	pvwhisparr	5	51805	115

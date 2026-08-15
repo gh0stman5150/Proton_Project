@@ -133,6 +133,9 @@ if [[ "$1" == 'compose' ]]; then
     echo 'qbittorrent'
     exit 0
   fi
+  if [[ "$2" == 'stop' ]]; then
+    exit 0
+  fi
 
   counter_file="${DOCKER_LOG}.compose-${QBT_PUBLISHED_PORT:-unset}.count"
   attempt=0
@@ -196,7 +199,10 @@ if [[ "$1" == 'inspect' && "$2" == '-f' ]]; then
   exit 0
 fi
 if [[ "$1" == 'top' ]]; then
-  if [[ "${QBT_TEST_DOCKER_ZOMBIE:-}" == "1" ]]; then
+  if [[ "${QBT_TEST_DOCKER_DSTATE:-}" == "1" ]]; then
+    printf 'PID STAT WCHAN CMD\n'
+    printf '2 Dsl folio_wait_bit_common qbittorrent-nox\n'
+  elif [[ "${QBT_TEST_DOCKER_ZOMBIE:-}" == "1" ]]; then
     printf 'PID STAT CMD\n'
     printf '1 Ss s6-svscan\n'
     printf '2 Zsl [qbittorrent-nox] <defunct>\n'
@@ -262,6 +268,59 @@ EOF
   grep -F 'QBT_PUBLISHED_PORT=40000' "$PORT_ENV_FILE"
 }
 
+@test "compose-recreate mode collapses a legacy two-key port artifact without restarting" {
+  write_qbt_env compose-recreate
+  echo 'CURRENT_PORT=40000' > "$STATE_FILE"
+  cat > "$PORT_ENV_FILE" <<'EOF'
+QBT_PUBLISHED_PORT=40000
+QBT_FORWARDED_PORT=40000
+EOF
+  printf '40000' > "$CURL_STATE"
+  printf '40000' > "$DOCKER_PORT_FILE"
+
+  run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" bash ./proton-qbittorrent-sync-safe.sh sonarr
+  [ "$status" -eq 0 ]
+  [ "$(awk '/^[A-Za-z_][A-Za-z0-9_]*=/ { count++ } END { print count + 0 }' "$PORT_ENV_FILE")" -eq 1 ]
+  grep -Fxq 'QBT_PUBLISHED_PORT=40000' "$PORT_ENV_FILE"
+  ! grep -Fq 'QBT_FORWARDED_PORT=' "$PORT_ENV_FILE"
+  ! grep -F 'CMD=compose up ' "$DOCKER_LOG"
+}
+
+@test "compose-recreate mode refuses the project static .env as its dynamic port artifact" {
+  write_qbt_env compose-recreate
+  echo "QBT_PORT_ENV_FILE=$PROJECT_DIR/.env" >> "$ENV_FILE"
+  echo 'CURRENT_PORT=40000' > "$STATE_FILE"
+
+  run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" bash ./proton-qbittorrent-sync-safe.sh sonarr
+  [ "$status" -ne 0 ]
+  ! grep -F 'CMD=compose up ' "$DOCKER_LOG"
+}
+
+@test "compose-recreate mode refuses a symlink that resolves to the project static .env" {
+  write_qbt_env compose-recreate
+  touch "$PROJECT_DIR/.env"
+  ln -s "$PROJECT_DIR/.env" "$TEST_TMPDIR/port-alias.env"
+  echo "QBT_PORT_ENV_FILE=$TEST_TMPDIR/port-alias.env" >> "$ENV_FILE"
+  echo 'CURRENT_PORT=40000' > "$STATE_FILE"
+
+  run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" bash ./proton-qbittorrent-sync-safe.sh sonarr
+  [ "$status" -ne 0 ]
+  ! grep -F 'CMD=compose up ' "$DOCKER_LOG"
+}
+
+@test "compose-recreate mode can force a rolling fleet configuration refresh when the port is unchanged" {
+  write_qbt_env compose-recreate
+  echo 'CURRENT_PORT=40000' > "$STATE_FILE"
+  echo 'QBT_PUBLISHED_PORT=40000' > "$PORT_ENV_FILE"
+  printf '40000' > "$CURL_STATE"
+  printf '40000' > "$DOCKER_PORT_FILE"
+
+  run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" QBT_FORCE_RECREATE=1 bash ./proton-qbittorrent-sync-safe.sh sonarr
+  [ "$status" -eq 0 ]
+  grep -F 'CMD=compose up -d --force-recreate --no-deps qbittorrent' "$DOCKER_LOG"
+  [ "$(awk '/^[A-Za-z_][A-Za-z0-9_]*=/ { count++ } END { print count + 0 }' "$PORT_ENV_FILE")" -eq 1 ]
+}
+
 @test "compose-recreate mode recreates when artifact matches but Docker still publishes the old port" {
   write_qbt_env compose-recreate
   echo 'CURRENT_PORT=40001' > "$STATE_FILE"
@@ -289,6 +348,8 @@ EOF
   grep -F "DOCKER_CONFIG=$DOCKER_CONFIG_DIR" "$DOCKER_LOG"
   grep -F 'QBT_PUBLISHED_PORT=40001' "$DOCKER_LOG"
   grep -F 'CMD=compose up -d --force-recreate --no-deps qbittorrent' "$DOCKER_LOG"
+  [ "$(awk -F= '/^[A-Za-z_][A-Za-z0-9_]*=/ { count++ } END { print count + 0 }' "$PORT_ENV_FILE")" -eq 1 ]
+  ! grep -Fq 'QBT_FORWARDED_PORT=' "$PORT_ENV_FILE"
 }
 
 @test "compose-recreate mode skips self-heal when qBittorrent is manually stopped" {
@@ -350,6 +411,18 @@ EOF
   grep -F 'QBT_PUBLISHED_PORT=30000' "$PORT_ENV_FILE"
 }
 
+@test "compose-recreate mode identifies kernel D-state as a host recovery boundary" {
+  write_qbt_env compose-recreate
+  echo 'CURRENT_PORT=40001' > "$STATE_FILE"
+  echo 'QBT_PUBLISHED_PORT=30000' > "$PORT_ENV_FILE"
+  printf '30000' > "$CURL_STATE"
+
+  run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" QBT_TEST_LOGIN_FAIL=1 QBT_TEST_CONTAINER_STATUS=running QBT_TEST_DOCKER_DSTATE=1 bash ./proton-qbittorrent-sync-safe.sh sonarr
+  [ "$status" -eq 1 ]
+  ! grep -F 'CMD=compose up ' "$DOCKER_LOG"
+  grep -F 'QBT_PUBLISHED_PORT=30000' "$PORT_ENV_FILE"
+}
+
 @test "compose-recreate mode retries a busy host port before succeeding" {
   write_qbt_env compose-recreate
   echo 'CURRENT_PORT=40001' > "$STATE_FILE"
@@ -358,7 +431,7 @@ EOF
 
   run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" QBT_TEST_COMPOSE_FAIL_PORT=40001 QBT_TEST_COMPOSE_FAIL_MODE=once QBT_COMPOSE_RECREATE_RETRIES=2 QBT_COMPOSE_RECREATE_RETRY_DELAY=0 bash ./proton-qbittorrent-sync-safe.sh sonarr
   [ "$status" -eq 0 ]
-  [[ "$(grep -c 'QBT_PUBLISHED_PORT=40001' "$DOCKER_LOG")" -eq 2 ]]
+  [[ "$(grep -c 'QBT_PUBLISHED_PORT=40001 CMD=compose up' "$DOCKER_LOG")" -eq 2 ]]
   grep -F 'QBT_PUBLISHED_PORT=40001' "$PORT_ENV_FILE"
 }
 

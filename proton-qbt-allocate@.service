@@ -1,12 +1,17 @@
 [Unit]
 Description=Proton qBittorrent Port Allocator and Sync for %i
-Wants=proton-wg@%i.service
-After=proton-wg@%i.service
+Requires=proton-wg@%i.service
+After=proton-wg@%i.service docker.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/proton_project/proton-qbt-allocate-and-sync.sh %i
+EnvironmentFile=-/etc/proton/proton-common.env
+EnvironmentFile=-/etc/proton/instances/%i/proton.env
+EnvironmentFile=-/etc/proton/instances/%i/qbittorrent.env
+ExecStart=/usr/local/bin/proton/proton-qbt-allocate-and-sync.sh %i
 Nice=10
+TimeoutStartSec=180
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target

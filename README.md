@@ -8,6 +8,18 @@ This repository implements and maintains a host level Proton WireGuard routing d
 
 This README documents the active implementation, runtime behavior, installation flow, and validation steps. If this README and `copilot-instructions.md` ever differ, follow `copilot-instructions.md`.
 
+## Detailed Documentation
+
+The qBittorrent fleet has dedicated architecture, operations, and incident documentation:
+
+1. [Fleet architecture and invariants](docs/architecture/qbittorrent-fleet-contract.md) defines the shared five-instance contract and the permitted instance-specific fields.
+2. [Port synchronization runbook](docs/runbooks/qbittorrent-port-sync.md) traces a Proton NAT-PMP lease through qBittorrent, the one-key artifact, and Docker TCP/UDP mappings.
+3. [Fleet change runbook](docs/runbooks/qbittorrent-fleet-changes.md) enforces “change one, change all” for shared code, Compose policy, init hooks, storage, and qBittorrent preferences.
+4. [Wedge recovery runbook](docs/runbooks/qbittorrent-wedge-recovery.md) distinguishes an application failure from a Docker/runtime wedge and an unkillable kernel `D`-state failure.
+5. [2026-08-14 Sonarr incident report](docs/incidents/2026-08-14-qbittorrent-sonarr-cifs-netfs-wedge.md) preserves the timeline, evidence, root-cause assessment, and corrective actions.
+
+Shared configuration changes must be implemented once and reconciled across `lidarr`, `prowlarr`, `radarr`, `sonarr`, and `whisparr`. Dynamic Proton ports remain independent: a lease change recreates only the qBittorrent service that owns that tunnel, using the same synchronizer behavior as the other four.
+
 ## Required Behavior
 
 The repository must enforce the following rules:
@@ -83,9 +95,9 @@ The following services are in scope for this routing and operational design:
 
 Prometheus is no longer used and is not in scope for this repository.
 
-## Required qBittorrent Env File
+## Legacy Singleton qBittorrent Env File
 
-The installer copies `proton-qbittorrent.env` to `/etc/proton/qbittorrent.env` and keeps it root owned with mode `600`.
+The installer preserves support for the older singleton file at `/etc/proton/qbittorrent.env`, root owned with mode `600`. New deployments use the named files under `/etc/proton/instances/<instance>/qbittorrent.env` described below.
 
 Minimum required variables:
 
@@ -107,7 +119,7 @@ QBT_PORT_ENV_FILE=/etc/proton/qbittorrent-port.env
 # Legacy DNAT mode only:
 QBT_CONTAINER_NAME=qbittorrent
 QBT_INTERNAL_PORT=6881
-QBT_NETWORK_NAME=starr
+QBT_NETWORK_NAME=starr_network
 ```
 
 The hardened path expects:
@@ -143,10 +155,10 @@ recreate the correct Compose service.
 | Instance   | qBittorrent            | Web UI | Interface  | Tunnel subnet |
 | ---        | ---                    | ---    | ---        | ---           |
 | `lidarr`   | `qbittorrent-lidarr`   | `8081` | `pvlidarr` | `10.2.0.2/32` |
-| `prowlarr` | `qbittorrent-prowlarr` | `8082` | `pvprowl`  | `10.6.0.2/32` |
+| `prowlarr` | `qbittorrent-prowlarr` | `8082` | `pvprowlarr` | `10.6.0.2/32` |
 | `radarr`   | `qbittorrent-radarr`   | `8083` | `pvradarr` | `10.3.0.2/32` |
 | `sonarr`   | `qbittorrent-sonarr`   | `8084` | `pvsonarr` | `10.4.0.2/32` |
-| `whisparr` | `qbittorrent-whisparr` | `8085` | `pvwhisp`  | `10.5.0.2/32` |
+| `whisparr` | `qbittorrent-whisparr` | `8085` | `pvwhisparr` | `10.5.0.2/32` |
 
 ### Same Server and Multi Tunnel Isolation
 
@@ -168,8 +180,8 @@ Each instance must define its own values:
 
 ```bash
 INSTANCE_NAME=prowlarr
-WG_PROFILE=pvprowl
-VPN_INTERFACE=pvprowl
+WG_PROFILE=pvprowlarr
+VPN_INTERFACE=pvprowlarr
 WG_CONFIG=/etc/proton/instances/prowlarr/wireguard.conf
 WG_ADDRESS_SUBNET=6
 STATE_DIR=/run/proton/prowlarr
@@ -203,7 +215,7 @@ When Proton assigns a new forwarded port, the default compose-recreate path must
 
 1. Detect the new forwarded port automatically
 2. Update the qBittorrent listening port automatically
-3. Update `QBT_PORT_ENV_FILE` which defaults to `/etc/proton/qbittorrent-port.env`
+3. Atomically update the per-instance `QBT_PORT_ENV_FILE`, `/etc/proton/instances/<instance>/qbittorrent-port.env`
 4. Recreate the qBittorrent Compose service only when the published port changes
 5. Do not recreate the qBittorrent container if the forwarded port is unchanged from the published-port artifact
 6. Verify that qBittorrent is listening on the expected port after the recreate path completes
@@ -211,7 +223,15 @@ When Proton assigns a new forwarded port, the default compose-recreate path must
 8. Confirm that qBittorrent remains bound only to the intended VPN path
 9. Refuse normal Compose self-heal if Docker still reports the named qBittorrent container as running but it has no published ports. That state means the container is wedged below the normal Compose control plane and another `docker compose up --force-recreate` will create short-ID orphans or Docker name conflicts instead of fixing the service.
 
-The recommended artifact path is `/etc/proton/qbittorrent-port.env`. In compose-recreate mode the sync script injects `QBT_PUBLISHED_PORT` into `docker compose`, so the service does not need write access to the Compose project tree just to update the published port.
+The per-instance artifact contains exactly one assignment:
+
+```dotenv
+QBT_PUBLISHED_PORT=<last-applied-port>
+```
+
+`QBT_FORWARDED_PORT` is obsolete and must not be present. The Compose project `.env` is a separate static file containing only `QBT_HOST_BIND_IP`; the sync script rejects any attempt to use it as the dynamic artifact. In compose-recreate mode the script injects `QBT_PUBLISHED_PORT` into the matching `docker compose` process, so qBittorrent does not need write access to the project tree.
+
+Every instance wrapper requires both `QBT_HOST_BIND_IP` and an explicitly injected `QBT_PUBLISHED_PORT`. There is no `0.0.0.0` bind fallback and no automatic torrent-port fallback. A bare `docker compose up` therefore fails safely instead of publishing a stale or WAN-wide port; use the Proton allocator/synchronizer.
 
 With `QBT_RESPECT_MANUAL_STOP=1`, the sync script treats an existing qBittorrent container in `created`, `exited`, `dead`, or `removing` state as intentionally stopped and skips compose recreation. It also treats recent Docker stop or network-disconnect events as a stop in progress for `QBT_MANUAL_STOP_EVENT_GRACE_SECONDS`, so a graceful qBittorrent shutdown is not mistaken for a wedged Web UI. Set `QBT_RESPECT_MANUAL_STOP=0` only if Proton should bring stopped qBittorrent containers back up automatically.
 
@@ -221,59 +241,15 @@ When the Web UI is unreachable at sync startup, compose-recreate mode attempts o
 
 ### qBittorrent Wedged-Container Recovery
 
-The self-heal guard exists for this Docker state:
+The synchronizer now checks three unsafe states before attempting Compose self-heal:
 
-1. The named container, such as `qbittorrent-prowlarr`, is still `running`
-2. Docker reports no published ports for that container
-3. qBittorrent Web UI probes fail
-4. `docker top` may show `qbittorrent-nox` as a zombie
-5. Compose recreate attempts would fail with a Docker name conflict because the old container still owns `/qbittorrent-<instance>`
+1. the named container is running but has lost its published-port metadata;
+2. a container process is a zombie;
+3. any container task is in uninterruptible kernel `D` state.
 
-Diagnose the state with:
+The third state is a host-kernel recovery boundary. The 2026-08-14 Sonarr incident included a qBittorrent thread blocked in `folio_wait_bit_common` after a CIFS/netfs kernel oops. Signals, `cgroup.kill`, Docker removal, Compose recreation, and killing `containerd-shim` cannot make a task return from damaged in-kernel I/O state. Preserve evidence and obtain approval for a host reboot; do not repeat destructive runtime cleanup.
 
-```bash
-docker ps -a --filter 'name=qbittorrent-prowlarr' --format 'table {{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Ports}}'
-docker inspect qbittorrent-prowlarr --format 'PID={{.State.Pid}} Health={{if .State.Health}}{{.State.Health.Status}}{{end}} Ports={{json .NetworkSettings.Ports}}'
-docker top qbittorrent-prowlarr -eo pid,ppid,stat,wchan,cmd
-journalctl --no-pager -u proton-port-forward@prowlarr.service -u proton-docker-watch@prowlarr.service --since '30 minutes ago' \
-  | grep -E 'Web UI unreachable|self-heal|running with no published ports|name .* already in use|qBittorrent sync failed'
-```
-
-When the guard fires, stop the per-instance Proton automation before attempting cleanup:
-
-```bash
-sudo systemctl stop proton-port-forward@prowlarr.service proton-docker-watch@prowlarr.service
-```
-
-Try cgroup cleanup first, using the current container PID so the command targets the live stuck scope:
-
-```bash
-pid=$(docker inspect qbittorrent-prowlarr --format '{{.State.Pid}}')
-cgroup=$(sed -n 's/^0:://p' "/proc/$pid/cgroup")
-echo 1 | sudo tee "/sys/fs/cgroup${cgroup}/cgroup.kill"
-```
-
-If the cgroup remains populated and Docker still cannot remove the container, kill the per-container `containerd-shim` parent:
-
-```bash
-pid=$(docker inspect qbittorrent-prowlarr --format '{{.State.Pid}}')
-shim=$(ps -o ppid= -p "$pid" | tr -d ' ')
-sudo kill -9 "$shim"
-```
-
-Then remove stale containers, recreate the service with the current forwarded port, and restart automation:
-
-```bash
-docker rm -f qbittorrent-prowlarr 2>/dev/null || true
-docker rm $(docker ps -aq --filter 'name=_qbittorrent-prowlarr') 2>/dev/null || true
-
-cd /opt/qbittorrent-prowlarr
-QBT_HOST_BIND_IP=10.6.0.2 QBT_PUBLISHED_PORT=54322 docker compose up -d --force-recreate --no-deps qbittorrent
-
-sudo systemctl start proton-docker-watch@prowlarr.service proton-port-forward@prowlarr.service
-```
-
-Substitute the instance name, `QBT_HOST_BIND_IP`, Web UI port, and `QBT_PUBLISHED_PORT` for other qBittorrent instances. For prowlarr, the default VPN bind IP is `10.6.0.2` and the Web UI port is `8082`; the published torrent port must come from the active Proton state, not from the Compose fallback.
+Use the full [wedge recovery runbook](docs/runbooks/qbittorrent-wedge-recovery.md). It provides the evidence commands, `S`/`Z`/`D` decision tree, reboot preparation, CIFS post-boot gate, sequential Proton restart, and five-instance acceptance criteria.
 
 ## Install
 
@@ -289,18 +265,20 @@ sudo ./install-proton-systemd.sh
 The installer:
 
 1. Ensures the required Proton VPN Debian packages are installed, bootstrapping the Proton VPN apt repository and installing `protonvpn` if any are missing
-2. Stops active Proton services first during a redeploy so old long-running processes do not survive the file copy
-3. Copies the active Proton scripts to `/usr/local/bin/proton`
-4. Copies the systemd unit files to `/etc/systemd/system`
-5. Copies environment templates to `/etc/proton`
-6. Secures the active WireGuard config as `root:root` with mode `600`
-7. Preserves an existing `/etc/proton/qbittorrent.env`
-8. Writes replacement templates to `*.new` files instead of overwriting secrets
-9. Installs units that have systemd recreate `/run/proton` before applying sandboxed writable paths
-10. Clears stale bad-server cooldowns, port-forward incapable state, port-forward incapability strikes, runtime selection state, and failed Proton service state before restart
-11. Runs `systemctl daemon-reload`
-12. Enables and restarts the Proton services
-13. Restarts Docker watcher services only if they were already enabled
+2. Leaves active templated instance chains running while files are copied; deployment alone is not a process restart or fleet rollout
+3. Copies the active Proton scripts, including the executable allocator and fleet tools, to `/usr/local/bin/proton`
+4. Copies systemd units to `/etc/systemd/system`; no unit executes from the source checkout
+5. Installs the shared qBittorrent Compose policy and canonical instance manifest under `/opt/qbittorrent-common`
+6. Copies environment templates to `/etc/proton`
+7. Secures active WireGuard and protected environment files as `root:root` with mode `600`
+8. Preserves existing secrets and writes replacement templates to `*.new` files rather than overwriting them
+9. Canonicalizes each existing per-instance port artifact to exactly one validated `QBT_PUBLISHED_PORT` assignment while preserving its value
+10. Installs units that have systemd recreate `/run/proton` before applying sandboxed writable paths
+11. Resets failed unit state without restarting active templated instance chains
+12. Runs `systemctl daemon-reload`
+13. Disables the obsolete singleton units, enables/restarts the host kill switch, and leaves templated instance startup/reconciliation to the operator
+
+After installation, run the protected fleet preflight and explicitly restart/reconcile the affected instance chains. A shared qBittorrent change is not complete until all five instances pass the runtime verifier.
 
 You can also pass qBittorrent credentials during install:
 
@@ -326,23 +304,22 @@ After the base install, you may optionally enable `proton-docker-watch@INSTANCE.
 
 ## Upgrade and Redeploy
 
-Re-running `install-proton-systemd.sh` is the preferred way to deploy script updates. The installer now resets stale runtime and selector state before restarting the Proton services so a patched rollout does not keep old cooldowns, old `port-forward incapable` marks, or a failed `proton-healthcheck.service` latched in place.
+Re-running `install-proton-systemd.sh` is the preferred way to copy and secure the canonical scripts, units, shared Compose policy, manifest, examples, and verification tools. It intentionally does not stop and restart every active templated instance chain during the file-copy phase. An operator must perform a controlled, sequential rollout after installation so a pre-existing unhealthy member cannot turn a deployment into an uncontrolled partial outage.
 
-On a redeploy, the installer also stops active Proton services before replacing the scripts on disk. That avoids leaving an old `proton-port-forward.service`, `proton-healthcheck.service`, or watcher process alive while the new script bundle is being copied into place.
-
-If you deploy files manually instead of using the installer, run the equivalent reset sequence yourself before restarting services:
+For a shared qBittorrent Compose/image/init change:
 
 ```bash
-sudo systemctl stop proton-docker-watch@prowlarr.service proton-healthcheck@prowlarr.service proton-port-forward@prowlarr.service proton-wg@prowlarr.service proton-killswitch.service || true
-sudo /usr/local/bin/proton/proton-server-manager.sh reset-incapable
-sudo /usr/local/bin/proton/proton-server-manager.sh reset-incapable-strikes
-sudo /usr/local/bin/proton/proton-server-manager.sh reset-bad
-sudo rm -f /run/proton/current-server.env /run/proton/proton-port.state /run/proton/recovery.lock
-sudo systemctl reset-failed proton-docker-watch@prowlarr.service proton-healthcheck@prowlarr.service proton-port-forward@prowlarr.service proton-wg@prowlarr.service proton-killswitch.service
-sudo systemctl restart proton-wg@prowlarr.service proton-port-forward@prowlarr.service proton-healthcheck@prowlarr.service
+sudo /usr/local/bin/proton/proton-qbt-fleet-reconcile.sh --preflight
+sudo /usr/local/bin/proton/proton-qbt-fleet-reconcile.sh --recreate
 ```
 
-The manual sequence intentionally preserves `PF_CAPABLE_PROFILES_FILE` so the selector can keep its proven-good port-forward allowlist while relearning only the transient failure state.
+For shared Proton/systemd code, reload units if needed and restart the affected templated chains sequentially, stopping on the first failure. Then run:
+
+```bash
+sudo /usr/local/bin/proton/proton-qbt-fleet-verify.sh --runtime
+```
+
+Do not use a Prowlarr-only redeploy sequence as a fleet upgrade. Follow the [fleet change runbook](docs/runbooks/qbittorrent-fleet-changes.md), which defines preflight, health-gated rollout, rollback, and final all-instance acceptance.
 
 ## Runtime State
 

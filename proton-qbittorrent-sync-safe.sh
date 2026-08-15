@@ -37,7 +37,7 @@ require_command() {
 	fi
 }
 
-for cmd in awk chmod curl flock mkdir mktemp rm sleep stat systemd-cat tr; do
+for cmd in awk chmod curl flock grep mkdir mktemp mv readlink rm sleep stat systemd-cat tr; do
 	require_command "$cmd"
 done
 
@@ -76,11 +76,26 @@ QBT_COMPOSE_RECREATE_RETRIES="${QBT_COMPOSE_RECREATE_RETRIES:-3}"
 QBT_COMPOSE_RECREATE_RETRY_DELAY="${QBT_COMPOSE_RECREATE_RETRY_DELAY:-5}"
 QBT_RESPECT_MANUAL_STOP="${QBT_RESPECT_MANUAL_STOP:-1}"
 QBT_MANUAL_STOP_EVENT_GRACE_SECONDS="${QBT_MANUAL_STOP_EVENT_GRACE_SECONDS:-180}"
+QBT_FORCE_RECREATE="${QBT_FORCE_RECREATE:-0}"
 
 case "$QBT_PORT_APPLY_MODE" in
 compose-recreate | legacy-dnat) ;;
 *)
 	log "ERROR: Unsupported QBT_PORT_APPLY_MODE '$QBT_PORT_APPLY_MODE'"
+	exit 1
+	;;
+esac
+
+if [[ "$QBT_PORT_APPLY_MODE" == "compose-recreate" && -n "$QBT_COMPOSE_PROJECT_DIR" &&
+	"$(readlink -m "$QBT_PORT_ENV_FILE")" == "$(readlink -m "${QBT_COMPOSE_PROJECT_DIR%/}/.env")" ]]; then
+	log "ERROR: QBT_PORT_ENV_FILE must not be the Compose project's static .env file"
+	exit 1
+fi
+
+case "${QBT_FORCE_RECREATE,,}" in
+0 | false | no | off | 1 | true | yes | on) ;;
+*)
+	log "ERROR: Invalid QBT_FORCE_RECREATE value: $QBT_FORCE_RECREATE"
 	exit 1
 	;;
 esac
@@ -104,12 +119,12 @@ if [[ -z "$PORT" ]]; then
 	exit 0
 fi
 
-if [[ ! "$PORT" =~ ^[0-9]+$ ]]; then
+if [[ ! "$PORT" =~ ^[0-9]+$ ]] || ((PORT < 1 || PORT > 65535)); then
 	log "ERROR: Invalid port value: $PORT"
 	exit 1
 fi
 
-if [[ ! "$QBT_INTERNAL_PORT" =~ ^[0-9]+$ ]]; then
+if [[ ! "$QBT_INTERNAL_PORT" =~ ^[0-9]+$ ]] || ((QBT_INTERNAL_PORT < 1 || QBT_INTERNAL_PORT > 65535)); then
 	log "ERROR: Invalid QBT_INTERNAL_PORT value: $QBT_INTERNAL_PORT"
 	exit 1
 fi
@@ -146,9 +161,21 @@ read_published_port() {
 	awk -F= '/^QBT_PUBLISHED_PORT=/ {print $2; exit}' "$QBT_PORT_ENV_FILE" 2>/dev/null || true
 }
 
+published_port_artifact_is_canonical() {
+	[[ -f "$QBT_PORT_ENV_FILE" ]] || return 1
+	[[ "$(awk '/^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=/ { count++ } END { print count + 0 }' "$QBT_PORT_ENV_FILE")" -eq 1 ]] || return 1
+	grep -Eq "^QBT_PUBLISHED_PORT=${PORT}$" "$QBT_PORT_ENV_FILE"
+}
+
 write_published_port_value() {
 	local value="$1"
 	local port_dir="${QBT_PORT_ENV_FILE%/*}"
+	local tmp_file=""
+
+	if [[ ! "$value" =~ ^[0-9]+$ ]] || ((value < 1 || value > 65535)); then
+		log "ERROR: Refusing to write invalid QBT_PUBLISHED_PORT value: $value"
+		return 1
+	fi
 
 	if [[ "$port_dir" == "$QBT_PORT_ENV_FILE" ]]; then
 		port_dir="."
@@ -156,12 +183,16 @@ write_published_port_value() {
 
 	ensure_directory "$port_dir" 700
 	umask 077
+	tmp_file="$(mktemp "${port_dir%/}/.qbittorrent-port.env.XXXXXX")"
 	{
 		echo "# Managed by proton-qbittorrent-sync-safe.sh"
 		echo "QBT_PUBLISHED_PORT=$value"
-		echo "QBT_FORWARDED_PORT=$value"
-	} >"$QBT_PORT_ENV_FILE"
-	chmod 600 "$QBT_PORT_ENV_FILE"
+	} >"$tmp_file"
+	chmod 600 "$tmp_file"
+	if ! mv -f "$tmp_file" "$QBT_PORT_ENV_FILE"; then
+		rm -f "$tmp_file"
+		return 1
+	fi
 }
 
 write_published_port() {
@@ -241,6 +272,17 @@ respect_manual_stop_enabled() {
 	esac
 }
 
+force_recreate_enabled() {
+	case "${QBT_FORCE_RECREATE,,}" in
+	1 | true | yes | on)
+		return 0
+		;;
+	*)
+		return 1
+		;;
+	esac
+}
+
 compose_container_ref_all() {
 	local container_id
 
@@ -251,7 +293,7 @@ compose_container_ref_all() {
 
 	container_id="$(
 		cd "$QBT_COMPOSE_PROJECT_DIR"
-		DOCKER_CONFIG="$DOCKER_CONFIG_DIR" docker compose ps --all -q "$QBT_COMPOSE_SERVICE" 2>/dev/null |
+		QBT_PUBLISHED_PORT="$PORT" DOCKER_CONFIG="$DOCKER_CONFIG_DIR" docker compose ps --all -q "$QBT_COMPOSE_SERVICE" 2>/dev/null |
 			awk 'NF { last = $0 } END { print last }'
 	)"
 
@@ -342,7 +384,7 @@ compose_container_ref() {
 
 	container_id="$(
 		cd "$QBT_COMPOSE_PROJECT_DIR"
-		DOCKER_CONFIG="$DOCKER_CONFIG_DIR" docker compose ps -q "$QBT_COMPOSE_SERVICE" 2>/dev/null |
+		QBT_PUBLISHED_PORT="$PORT" DOCKER_CONFIG="$DOCKER_CONFIG_DIR" docker compose ps -q "$QBT_COMPOSE_SERVICE" 2>/dev/null |
 			awk 'NF { last = $0 } END { print last }'
 	)"
 
@@ -384,6 +426,13 @@ compose_container_has_zombie_process() {
 		awk 'NR > 1 && $2 ~ /^Z/ { found = 1 } END { exit found ? 0 : 1 }'
 }
 
+compose_container_has_uninterruptible_task() {
+	local container_ref="$1"
+
+	docker top "$container_ref" -eLo pid,stat,wchan:48,cmd 2>/dev/null |
+		awk 'NR > 1 && $2 ~ /^D/ { found = 1 } END { exit found ? 0 : 1 }'
+}
+
 compose_container_is_wedged_for_recreate() {
 	local container_ref
 	local status
@@ -393,8 +442,13 @@ compose_container_is_wedged_for_recreate() {
 	status="$(docker inspect -f '{{.State.Status}}' "$container_ref" 2>/dev/null || true)"
 	[[ "$status" == "running" ]] || return 1
 
+	if compose_container_has_uninterruptible_task "$container_ref"; then
+		log "ERROR: qBittorrent container ${QBT_CONTAINER_NAME:-$container_ref} has an uninterruptible D-state task; refusing Compose recreation. Capture kernel/CIFS evidence and recover the host before retrying; signals and repeated Docker removal cannot release kernel-blocked I/O."
+		return 0
+	fi
+
 	if compose_container_has_zombie_process "$container_ref"; then
-		log "ERROR: qBittorrent container ${QBT_CONTAINER_NAME:-$container_ref} is running with a zombie process (published ports: $(compose_published_ports_summary)); refusing Compose recreate to avoid hanging on Docker stop. Stop proton services and clear the stuck container cgroup/shim before recreating."
+		log "ERROR: qBittorrent container ${QBT_CONTAINER_NAME:-$container_ref} is running with a zombie process (published ports: $(compose_published_ports_summary)); refusing Compose recreate to avoid hanging on Docker stop. Capture every task state and follow the wedge-recovery runbook; do not force cgroup/shim cleanup if any task is in uninterruptible D state."
 		return 0
 	fi
 
@@ -470,7 +524,7 @@ run_compose_recreate() {
 	while ((attempt <= QBT_COMPOSE_RECREATE_RETRIES)); do
 		(
 			cd "$QBT_COMPOSE_PROJECT_DIR"
-			DOCKER_CONFIG="$DOCKER_CONFIG_DIR" docker compose stop "$QBT_COMPOSE_SERVICE"
+			QBT_PUBLISHED_PORT="$target_port" DOCKER_CONFIG="$DOCKER_CONFIG_DIR" docker compose stop "$QBT_COMPOSE_SERVICE"
 		) >/dev/null 2>&1 || true
 		clean_stale_qbt_lock
 		if (
@@ -678,10 +732,12 @@ fi
 CURRENT_QBT_PORT="$(qbt_get_listen_port "$COOKIE_JAR" || true)"
 CURRENT_PUBLISHED_PORT="$(read_published_port || true)"
 LISTEN_PORT_CHANGED=0
-PUBLISHED_PORT_CHANGED=0
 DNAT_CHANGED=0
+COMPOSE_RECREATED=0
+PORT_ARTIFACT_NORMALIZED=0
 
-if [[ -n "$CURRENT_PUBLISHED_PORT" && ! "$CURRENT_PUBLISHED_PORT" =~ ^[0-9]+$ ]]; then
+if [[ -n "$CURRENT_PUBLISHED_PORT" ]] &&
+	{ [[ ! "$CURRENT_PUBLISHED_PORT" =~ ^[0-9]+$ ]] || ((CURRENT_PUBLISHED_PORT < 1 || CURRENT_PUBLISHED_PORT > 65535)); }; then
 	log "ERROR: Invalid QBT_PUBLISHED_PORT value in $QBT_PORT_ENV_FILE: $CURRENT_PUBLISHED_PORT"
 	exit 1
 fi
@@ -696,20 +752,27 @@ compose-recreate)
 	if compose_service_publishes_port "$PORT"; then
 		COMPOSE_PORTS_MATCH=1
 	fi
+	if [[ "$CURRENT_PUBLISHED_PORT" == "$PORT" ]] && ! published_port_artifact_is_canonical; then
+		log "Normalizing qBittorrent published-port artifact to its one-key schema"
+		write_published_port
+		PORT_ARTIFACT_NORMALIZED=1
+	fi
 
-	if [[ "$CURRENT_PUBLISHED_PORT" != "$PORT" ]] || ((!COMPOSE_PORTS_MATCH)); then
+	if [[ "$CURRENT_PUBLISHED_PORT" != "$PORT" ]] || ((!COMPOSE_PORTS_MATCH)) || force_recreate_enabled; then
 		rollback_port=""
 
 		if [[ "$CURRENT_PUBLISHED_PORT" != "$PORT" ]]; then
 			log "Updating qBittorrent published port artifact -> $PORT"
 			rollback_port="$CURRENT_PUBLISHED_PORT"
-		else
+		elif ((!COMPOSE_PORTS_MATCH)); then
 			log "Docker published ports are stale for qBittorrent; expected TCP/UDP $PORT, actual: $(compose_published_ports_summary)"
 			rollback_port="$CURRENT_DOCKER_PUBLISHED_PORT"
+		else
+			log "Forcing qBittorrent Compose recreation for a fleet-controlled configuration rollout"
+			rollback_port="$CURRENT_PUBLISHED_PORT"
 		fi
 
 		write_published_port
-		PUBLISHED_PORT_CHANGED=1
 		if ! recreate_qbt_service_compose "$PORT"; then
 			if [[ -n "$rollback_port" ]]; then
 				log "Restoring qBittorrent published port artifact -> $rollback_port"
@@ -731,6 +794,7 @@ compose-recreate)
 			fi
 			exit 1
 		fi
+		COMPOSE_RECREATED=1
 	fi
 	;;
 legacy-dnat)
@@ -743,12 +807,14 @@ esac
 
 write_cache
 
-if ((PUBLISHED_PORT_CHANGED)); then
+if ((COMPOSE_RECREATED)); then
 	log "qBittorrent updated successfully with Compose recreation"
 elif ((LISTEN_PORT_CHANGED)); then
 	log "qBittorrent updated successfully"
 elif ((DNAT_CHANGED)); then
 	log "qBittorrent DNAT refreshed successfully"
+elif ((PORT_ARTIFACT_NORMALIZED)); then
+	log "qBittorrent port artifact normalized successfully"
 else
 	log "qBittorrent already using port $PORT"
 fi

@@ -47,4 +47,8 @@
 
   grep -Fq 'Requires=proton-wg@%i.service proton-port-forward@%i.service' proton-healthcheck@.service
   grep -Fq 'ExecStart=/usr/local/bin/proton/proton-healthcheck.sh %i' proton-healthcheck@.service
+
+  grep -Fq 'ExecStart=/usr/local/bin/proton/proton-qbt-allocate-and-sync.sh %i' proton-qbt-allocate@.service
+  grep -Fq 'Requires=proton-wg@%i.service' proton-qbt-allocate@.service
+  ! grep -Fq '/usr/local/bin/proton_project/' proton-qbt-allocate@.service
 }

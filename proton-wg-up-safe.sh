@@ -810,12 +810,10 @@ inject_routes() {
 		for cidr in ${DOCKER_NETWORK_CIDR//,/ }; do
 			cidr="$(trim_field "$cidr")"
 			[[ -n "$cidr" ]] || continue
-			ip rule del from "$cidr" to "$cidr" lookup main priority "$DOCKER_LOCAL_RULE_PRIORITY" 2>/dev/null || true
-			ip rule add from "$cidr" to "$cidr" lookup main priority "$DOCKER_LOCAL_RULE_PRIORITY"
+			proton_replace_ip_rule 4 from "$cidr" to "$cidr" lookup main priority "$DOCKER_LOCAL_RULE_PRIORITY"
 
 			if [[ -n "$LAN_CIDR" ]]; then
-				ip rule del from "$cidr" to "$LAN_CIDR" lookup main priority "$DOCKER_LAN_RULE_PRIORITY" 2>/dev/null || true
-				ip rule add from "$cidr" to "$LAN_CIDR" lookup main priority "$DOCKER_LAN_RULE_PRIORITY"
+				proton_replace_ip_rule 4 from "$cidr" to "$LAN_CIDR" lookup main priority "$DOCKER_LAN_RULE_PRIORITY"
 			fi
 
 			# Remove the legacy singleton Docker->VPN rule. With multiple
@@ -872,8 +870,7 @@ inject_routes() {
 		for cidr in ${DOCKER_NETWORK_CIDR6//,/ }; do
 			cidr="$(trim_field "$cidr")"
 			[[ -n "$cidr" ]] || continue
-			ip -6 rule del from "$cidr" to "$cidr" lookup main priority "$DOCKER_LOCAL_RULE_PRIORITY" 2>/dev/null || true
-			ip -6 rule add from "$cidr" to "$cidr" lookup main priority "$DOCKER_LOCAL_RULE_PRIORITY"
+			proton_replace_ip_rule 6 from "$cidr" to "$cidr" lookup main priority "$DOCKER_LOCAL_RULE_PRIORITY"
 			ip -6 rule del from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY" 2>/dev/null || true
 			if docker_ipv6_fallback_enabled; then
 				ip -6 rule add from "$cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY"
@@ -897,7 +894,12 @@ inject_routes() {
 	ensure_vpn_tcp_mss_clamp_rules
 }
 
+if ! proton_route_lock_acquire; then
+	log "ERROR: Could not acquire the shared policy-route lock for $INSTANCE"
+	exit 1
+fi
 inject_routes
+proton_route_lock_release
 
 # Wait for an IPv4 address on the VPN interface instead of a fixed sleep.
 # Configurable timeout (seconds).

@@ -35,9 +35,12 @@ QBT_NETWORK_NAME=starr_network
 EOF
   done
 
-  cat > "$TMPBIN/ip" <<'EOF'
+cat > "$TMPBIN/ip" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$IP_LOG"
+if [[ "$*" == *"rule del"* || "$*" == *"rule del "* ]]; then
+  exit 2
+fi
 EOF
   cat > "$TMPBIN/docker" <<'EOF'
 #!/usr/bin/env bash
