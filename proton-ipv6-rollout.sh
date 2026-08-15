@@ -65,8 +65,8 @@ env_value() {
 
 ipv6_is_enabled() {
 	case "$(env_value WG_IPV6_ENABLED)" in
-		1 | true | yes | on) return 0 ;;
-		*) return 1 ;;
+	1 | true | yes | on) return 0 ;;
+	*) return 1 ;;
 	esac
 }
 
@@ -98,11 +98,11 @@ preflight() {
 
 	backend="$(env_value KILLSWITCH_BACKEND || true)"
 	case "${backend:-auto}" in
-		auto | nft | nftables) ;;
-		*)
-			printf 'FAIL: IPv6 rollout requires the nftables kill-switch backend; found %s\n' "$backend" >&2
-			failed=1
-			;;
+	auto | nft | nftables) ;;
+	*)
+		printf 'FAIL: IPv6 rollout requires the nftables kill-switch backend; found %s\n' "$backend" >&2
+		failed=1
+		;;
 	esac
 
 	if ipv6_is_enabled; then
@@ -110,7 +110,7 @@ preflight() {
 		failed=1
 	fi
 
-	if command -v docker >/dev/null 2>&1 && \
+	if command -v docker >/dev/null 2>&1 &&
 		[[ "$(docker network inspect starr_network --format '{{.EnableIPv6}}' 2>/dev/null || true)" == "true" ]]; then
 		printf '%s\n' 'FAIL: starr_network already has IPv6 enabled; current state is not the expected IPv4-only baseline' >&2
 		failed=1
@@ -122,7 +122,7 @@ preflight() {
 		printf '%s\n' 'INFO: /archive is absent; no archive comparison is available'
 	fi
 
-	(( failed == 0 )) || return 1
+	((failed == 0)) || return 1
 	printf '%s\n' 'PASS: IPv4-only baseline is intact; snapshot may proceed'
 }
 
@@ -182,7 +182,7 @@ docker_preflight() {
 			failed=1
 		fi
 	done
-	(( failed == 0 )) || return 1
+	((failed == 0)) || return 1
 
 	[[ -n "$cidr" ]] || {
 		printf '%s\n' 'FAIL: docker-preflight requires an explicit IPv6 CIDR' >&2
@@ -195,11 +195,11 @@ docker_preflight() {
 
 	backend="$(env_value KILLSWITCH_BACKEND || true)"
 	case "$backend" in
-		nft | nftables) ;;
-		*)
-			printf 'FAIL: Docker IPv6 requires explicit KILLSWITCH_BACKEND=nftables; found %s\n' "${backend:-unset}" >&2
-			failed=1
-			;;
+	nft | nftables) ;;
+	*)
+		printf 'FAIL: Docker IPv6 requires explicit KILLSWITCH_BACKEND=nftables; found %s\n' "${backend:-unset}" >&2
+		failed=1
+		;;
 	esac
 
 	docker_ipv6="$(docker network inspect "$DOCKER_NETWORK_NAME" --format '{{.EnableIPv6}}' 2>/dev/null || true)"
@@ -217,7 +217,7 @@ docker_preflight() {
 	fi
 
 	for script in "${firewall_scripts[@]}"; do
-		if [[ ! -f "$PROJECT_DIR/$script" || ! -f "$LIVE_DIR/$script" ]] || \
+		if [[ ! -f "$PROJECT_DIR/$script" || ! -f "$LIVE_DIR/$script" ]] ||
 			! cmp -s "$PROJECT_DIR/$script" "$LIVE_DIR/$script"; then
 			printf 'FAIL: tested and installed Docker IPv6 scripts differ: %s\n' "$script" >&2
 			failed=1
@@ -241,15 +241,15 @@ docker_preflight() {
 		failed=1
 	}
 
-	(( failed == 0 )) || return 1
+	((failed == 0)) || return 1
 	printf 'PASS: Docker IPv6 preflight is clean for %s; no live state was changed\n' "$cidr"
 	printf 'NEXT: create a fresh rollout snapshot before any activation work\n'
 }
 
 validate_instance_name() {
 	case "$1" in
-		lidarr | radarr | sonarr | whisparr | prowlarr) ;;
-		*) die "Unsupported canary instance: $1" ;;
+	lidarr | radarr | sonarr | whisparr | prowlarr) ;;
+	*) die "Unsupported canary instance: $1" ;;
 	esac
 }
 
@@ -264,43 +264,43 @@ canary_preflight() {
 	done
 
 	latest="$(readlink -f "${STATE_ROOT}/latest" 2>/dev/null || true)"
-	[[ -n "$latest" && "$latest" == "$(readlink -f "$STATE_ROOT")"/* ]] \
-		|| die "No valid latest snapshot exists below $STATE_ROOT"
-	[[ -f "${latest}/payload.tar.gz" && -f "${latest}/manifest/active-services.txt" ]] \
-		|| die "Latest snapshot is incomplete: $latest"
-	tar -tzf "${latest}/payload.tar.gz" >/dev/null \
-		|| die "Latest snapshot payload is unreadable: $latest"
+	[[ -n "$latest" && "$latest" == "$(readlink -f "$STATE_ROOT")"/* ]] ||
+		die "No valid latest snapshot exists below $STATE_ROOT"
+	[[ -f "${latest}/payload.tar.gz" && -f "${latest}/manifest/active-services.txt" ]] ||
+		die "Latest snapshot is incomplete: $latest"
+	tar -tzf "${latest}/payload.tar.gz" >/dev/null ||
+		die "Latest snapshot payload is unreadable: $latest"
 
 	if ipv6_is_enabled; then
 		die "Global WG_IPV6_ENABLED must remain off for a single-instance canary"
 	fi
 
 	docker_ipv6="$(docker network inspect starr_network --format '{{.EnableIPv6}}' 2>/dev/null || true)"
-	[[ "$docker_ipv6" == "false" ]] \
-		|| die "starr_network must remain IPv4-only during the tunnel canary"
+	[[ "$docker_ipv6" == "false" ]] ||
+		die "starr_network must remain IPv4-only during the tunnel canary"
 
 	while IFS= read -r instance_env; do
 		case "$(env_value WG_IPV6_ENABLED "$instance_env")" in
-			1 | true | yes | on) enabled_count=$((enabled_count + 1)) ;;
+		1 | true | yes | on) enabled_count=$((enabled_count + 1)) ;;
 		esac
 	done < <(find "$INSTANCE_ROOT" -mindepth 2 -maxdepth 2 -type f -name proton.env 2>/dev/null)
-	(( enabled_count <= 1 )) || die "More than one instance has WG_IPV6_ENABLED enabled"
+	((enabled_count <= 1)) || die "More than one instance has WG_IPV6_ENABLED enabled"
 
 	instance_env="${INSTANCE_ROOT}/${instance}/proton.env"
 	[[ -r "$instance_env" ]] || die "Instance environment is not readable: $instance_env"
 	case "$(env_value WG_IPV6_ENABLED "$instance_env")" in
-		1 | true | yes | on) ;;
-		*) die "$instance must explicitly set WG_IPV6_ENABLED=on" ;;
+	1 | true | yes | on) ;;
+	*) die "$instance must explicitly set WG_IPV6_ENABLED=on" ;;
 	esac
 
 	selected_file="${RUNTIME_ROOT}/${instance}/current-server.env"
 	[[ -r "$selected_file" ]] || die "Selected-server state is not readable: $selected_file"
 	selected_config="$(env_value SELECTED_CONFIG "$selected_file")"
 	selected_name="$(env_value SELECTED_WG_PROFILE "$selected_file")"
-	[[ -n "$selected_config" && -f "$selected_config" ]] \
-		|| die "Selected WireGuard config is missing for $instance"
-	[[ "$selected_config" == "$WG_POOL_DIR"/* ]] \
-		|| die "Selected config is outside WG_POOL_DIR: $selected_config"
+	[[ -n "$selected_config" && -f "$selected_config" ]] ||
+		die "Selected WireGuard config is missing for $instance"
+	[[ "$selected_config" == "$WG_POOL_DIR"/* ]] ||
+		die "Selected config is outside WG_POOL_DIR: $selected_config"
 
 	awk -F= '
 		/^[[:space:]]*Address[[:space:]]*=/ && $2 ~ /:/ { address = 1 }
@@ -384,16 +384,16 @@ start_snapshot_services() {
 
 	for unit in "${active_services[@]}"; do
 		case "$unit" in
-			proton-killswitch.service | proton-wg@* | proton-port-forward@* | proton-healthcheck@* | proton-docker-watch@*)
-				continue
-				;;
+		proton-killswitch.service | proton-wg@* | proton-port-forward@* | proton-healthcheck@* | proton-docker-watch@*)
+			continue
+			;;
 		esac
 		if ! systemctl start "$unit"; then
 			failed_services+=("$unit")
 		fi
 	done
 
-	if (( ${#failed_services[@]} > 0 )); then
+	if ((${#failed_services[@]} > 0)); then
 		printf 'ERROR: Rollback restored files but these services failed to start: %s\n' "${failed_services[*]}" >&2
 		return 1
 	fi
@@ -472,7 +472,7 @@ activate_canary() {
 
 	curl_error="$(mktemp)"
 	if public_ipv6="$(curl --noproxy '*' --interface "$vpn_if" -6 -fsS \
-		--connect-timeout 10 --max-time 20 https://api64.ipify.org 2>"$curl_error")" && \
+		--connect-timeout 10 --max-time 20 https://api64.ipify.org 2>"$curl_error")" &&
 		[[ "$public_ipv6" == *:* ]]; then
 		log "PASS: outbound IPv6 succeeded through $vpn_if"
 	else
@@ -488,7 +488,7 @@ activate_canary() {
 		fi
 	done
 
-	if (( failed )); then
+	if ((failed)); then
 		log "CANARY FAILED: restoring $instance to its saved IPv4-only environment"
 		cp -a "$backup" "$instance_env"
 		restart_instance "$instance" || true
@@ -544,8 +544,8 @@ snapshot() {
 		[[ "$compose_path" == /* ]] || die "QBT_COMPOSE_PROJECT_DIR must be absolute: $compose_path"
 		snapshot_paths+=("$compose_path")
 	done < <(
-		grep -RhsE '^QBT_COMPOSE_PROJECT_DIR=' /etc/proton/instances 2>/dev/null \
-			| cut -d= -f2- | sort -u
+		grep -RhsE '^QBT_COMPOSE_PROJECT_DIR=' /etc/proton/instances 2>/dev/null |
+			cut -d= -f2- | sort -u
 	)
 
 	for path in "${snapshot_paths[@]}"; do
@@ -566,8 +566,8 @@ snapshot() {
 	record_command "${manifest}/wg-show.txt" wg show
 	record_command "${manifest}/nft-ruleset.txt" nft list ruleset
 	record_command "${manifest}/docker-networks.json" docker network inspect starr_network
-	systemctl list-units --state=active --plain --no-legend 'proton*.service' \
-		| awk '{print $1}' >"${manifest}/active-services.txt" || true
+	systemctl list-units --state=active --plain --no-legend 'proton*.service' |
+		awk '{print $1}' >"${manifest}/active-services.txt" || true
 	systemctl list-unit-files --plain --no-legend 'proton*.service' \
 		>"${manifest}/unit-files.txt" 2>&1 || true
 
@@ -600,10 +600,10 @@ rollback() {
 
 	mapfile -t active_services < <(cat "${requested}/manifest/active-services.txt" 2>/dev/null || true)
 	mapfile -t current_services < <(
-		systemctl list-units --state=active --plain --no-legend 'proton*.service' 2>/dev/null \
-			| awk '{print $1}'
+		systemctl list-units --state=active --plain --no-legend 'proton*.service' 2>/dev/null |
+			awk '{print $1}'
 	)
-	if (( ${#current_services[@]} > 0 )); then
+	if ((${#current_services[@]} > 0)); then
 		systemctl stop "${current_services[@]}" || true
 	fi
 
@@ -611,8 +611,8 @@ rollback() {
 		[[ "$path" == /* ]] || die "Invalid path in snapshot manifest: $path"
 		rm -rf "$path"
 		if [[ "$state" == "present" ]]; then
-			[[ -e "${ROLLBACK_RESTORE_ROOT}/payload${path}" || -L "${ROLLBACK_RESTORE_ROOT}/payload${path}" ]] \
-				|| die "Snapshot payload is incomplete for $path"
+			[[ -e "${ROLLBACK_RESTORE_ROOT}/payload${path}" || -L "${ROLLBACK_RESTORE_ROOT}/payload${path}" ]] ||
+				die "Snapshot payload is incomplete for $path"
 			mkdir -p "$(dirname "$path")"
 			cp -a "${ROLLBACK_RESTORE_ROOT}/payload${path}" "$path"
 		elif [[ "$state" != "absent" ]]; then
@@ -626,7 +626,7 @@ rollback() {
 	fi
 
 	systemctl daemon-reload
-	if (( ${#active_services[@]} > 0 )); then
+	if ((${#active_services[@]} > 0)); then
 		start_snapshot_services "${active_services[@]}"
 	fi
 	cleanup_rollback_restore_root
@@ -639,16 +639,16 @@ main() {
 	require_command ip
 
 	case "${1:-}" in
-		status) status ;;
-		preflight) preflight ;;
-		canary-preflight) canary_preflight "${2:-}" ;;
-		activate-canary) activate_canary "${2:-}" ;;
-		deactivate-canary) deactivate_canary "${2:-}" ;;
-		docker-preflight) docker_preflight "${2:-}" ;;
-		snapshot) snapshot ;;
-		rollback) rollback "${2:-}" ;;
-		-h | --help | help | '') usage ;;
-		*) die "Unknown command: $1" ;;
+	status) status ;;
+	preflight) preflight ;;
+	canary-preflight) canary_preflight "${2:-}" ;;
+	activate-canary) activate_canary "${2:-}" ;;
+	deactivate-canary) deactivate_canary "${2:-}" ;;
+	docker-preflight) docker_preflight "${2:-}" ;;
+	snapshot) snapshot ;;
+	rollback) rollback "${2:-}" ;;
+	-h | --help | help | '') usage ;;
+	*) die "Unknown command: $1" ;;
 	esac
 }
 

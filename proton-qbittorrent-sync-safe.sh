@@ -4,8 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTANCE_COMMON_SCRIPT="${PROTON_INSTANCE_COMMON_SCRIPT:-${SCRIPT_DIR}/proton-instance-common.sh}"
 if [[ ! -f "$INSTANCE_COMMON_SCRIPT" ]]; then
-    echo "ERROR: Proton instance helper not found: $INSTANCE_COMMON_SCRIPT" >&2
-    exit 1
+	echo "ERROR: Proton instance helper not found: $INSTANCE_COMMON_SCRIPT" >&2
+	exit 1
 fi
 # shellcheck disable=SC1090
 source "$INSTANCE_COMMON_SCRIPT"
@@ -21,44 +21,44 @@ CACHE_DIR="${CACHE_FILE%/*}"
 DOCKER_CONFIG_DIR="${DOCKER_CONFIG_DIR:-${CACHE_DIR}/docker-config}"
 
 if [[ "$CACHE_DIR" == "$CACHE_FILE" ]]; then
-    CACHE_DIR="."
+	CACHE_DIR="."
 fi
 
 log() {
-    echo "$(date '+%F %T') | $*" | systemd-cat -t "$LOG_TAG"
+	echo "$(date '+%F %T') | $*" | systemd-cat -t "$LOG_TAG"
 }
 
 require_command() {
-    local cmd="$1"
+	local cmd="$1"
 
-    if ! command -v "$cmd" >/dev/null 2>&1; then
-        log "ERROR: Required command '$cmd' is not installed."
-        exit 1
-    fi
+	if ! command -v "$cmd" >/dev/null 2>&1; then
+		log "ERROR: Required command '$cmd' is not installed."
+		exit 1
+	fi
 }
 
 for cmd in awk chmod curl flock mkdir mktemp rm sleep stat systemd-cat tr; do
-    require_command "$cmd"
+	require_command "$cmd"
 done
 
 ensure_directory() {
-    local dir="$1"
-    local mode="${2:-}"
-    local created=0
+	local dir="$1"
+	local mode="${2:-}"
+	local created=0
 
-    if [[ ! -d "$dir" ]]; then
-        mkdir -p "$dir"
-        created=1
-    fi
+	if [[ ! -d "$dir" ]]; then
+		mkdir -p "$dir"
+		created=1
+	fi
 
-    if (( created )) && [[ -n "$mode" ]]; then
-        chmod "$mode" "$dir"
-    fi
+	if ((created)) && [[ -n "$mode" ]]; then
+		chmod "$mode" "$dir"
+	fi
 }
 
 if [[ ! -f "$QBT_COMMON_SCRIPT" ]]; then
-    log "ERROR: qBittorrent helper script not found: $QBT_COMMON_SCRIPT"
-    exit 1
+	log "ERROR: qBittorrent helper script not found: $QBT_COMMON_SCRIPT"
+	exit 1
 fi
 
 # shellcheck disable=SC1090
@@ -78,22 +78,21 @@ QBT_RESPECT_MANUAL_STOP="${QBT_RESPECT_MANUAL_STOP:-1}"
 QBT_MANUAL_STOP_EVENT_GRACE_SECONDS="${QBT_MANUAL_STOP_EVENT_GRACE_SECONDS:-180}"
 
 case "$QBT_PORT_APPLY_MODE" in
-compose-recreate | legacy-dnat)
-    ;;
+compose-recreate | legacy-dnat) ;;
 *)
-    log "ERROR: Unsupported QBT_PORT_APPLY_MODE '$QBT_PORT_APPLY_MODE'"
-    exit 1
-    ;;
+	log "ERROR: Unsupported QBT_PORT_APPLY_MODE '$QBT_PORT_APPLY_MODE'"
+	exit 1
+	;;
 esac
 
 ensure_directory "$CACHE_DIR" 700
 
 acquire_sync_lock() {
-    exec 200>"$QBT_SYNC_LOCK_FILE"
-    if ! flock -n 200; then
-        log "Another qBittorrent sync is already running; skipping"
-        exit 0
-    fi
+	exec 200>"$QBT_SYNC_LOCK_FILE"
+	if ! flock -n 200; then
+		log "Another qBittorrent sync is already running; skipping"
+		exit 0
+	fi
 }
 
 acquire_sync_lock
@@ -101,273 +100,273 @@ acquire_sync_lock
 PORT="$(awk -F= '/^CURRENT_PORT=/ {print $2; exit}' "$STATE_FILE" 2>/dev/null || true)"
 
 if [[ -z "$PORT" ]]; then
-    log "No port found, skipping"
-    exit 0
+	log "No port found, skipping"
+	exit 0
 fi
 
 if [[ ! "$PORT" =~ ^[0-9]+$ ]]; then
-    log "ERROR: Invalid port value: $PORT"
-    exit 1
+	log "ERROR: Invalid port value: $PORT"
+	exit 1
 fi
 
 if [[ ! "$QBT_INTERNAL_PORT" =~ ^[0-9]+$ ]]; then
-    log "ERROR: Invalid QBT_INTERNAL_PORT value: $QBT_INTERNAL_PORT"
-    exit 1
+	log "ERROR: Invalid QBT_INTERNAL_PORT value: $QBT_INTERNAL_PORT"
+	exit 1
 fi
 
-if [[ ! "$QBT_COMPOSE_RECREATE_RETRIES" =~ ^[0-9]+$ ]] || (( QBT_COMPOSE_RECREATE_RETRIES < 1 )); then
-    log "ERROR: Invalid QBT_COMPOSE_RECREATE_RETRIES value: $QBT_COMPOSE_RECREATE_RETRIES"
-    exit 1
+if [[ ! "$QBT_COMPOSE_RECREATE_RETRIES" =~ ^[0-9]+$ ]] || ((QBT_COMPOSE_RECREATE_RETRIES < 1)); then
+	log "ERROR: Invalid QBT_COMPOSE_RECREATE_RETRIES value: $QBT_COMPOSE_RECREATE_RETRIES"
+	exit 1
 fi
 
 if [[ ! "$QBT_COMPOSE_RECREATE_RETRY_DELAY" =~ ^[0-9]+$ ]]; then
-    log "ERROR: Invalid QBT_COMPOSE_RECREATE_RETRY_DELAY value: $QBT_COMPOSE_RECREATE_RETRY_DELAY"
-    exit 1
+	log "ERROR: Invalid QBT_COMPOSE_RECREATE_RETRY_DELAY value: $QBT_COMPOSE_RECREATE_RETRY_DELAY"
+	exit 1
 fi
 
 COOKIE_JAR="$(mktemp)"
 cleanup() {
-    rm -f "$COOKIE_JAR"
+	rm -f "$COOKIE_JAR"
 }
 trap cleanup EXIT
 
 write_cache() {
-    umask 077
-    echo "$PORT" > "$CACHE_FILE"
+	umask 077
+	echo "$PORT" >"$CACHE_FILE"
 }
 
 write_cache_value() {
-    local value="$1"
+	local value="$1"
 
-    umask 077
-    echo "$value" > "$CACHE_FILE"
+	umask 077
+	echo "$value" >"$CACHE_FILE"
 }
 
 read_published_port() {
-    awk -F= '/^QBT_PUBLISHED_PORT=/ {print $2; exit}' "$QBT_PORT_ENV_FILE" 2>/dev/null || true
+	awk -F= '/^QBT_PUBLISHED_PORT=/ {print $2; exit}' "$QBT_PORT_ENV_FILE" 2>/dev/null || true
 }
 
 write_published_port_value() {
-    local value="$1"
-    local port_dir="${QBT_PORT_ENV_FILE%/*}"
+	local value="$1"
+	local port_dir="${QBT_PORT_ENV_FILE%/*}"
 
-    if [[ "$port_dir" == "$QBT_PORT_ENV_FILE" ]]; then
-        port_dir="."
-    fi
+	if [[ "$port_dir" == "$QBT_PORT_ENV_FILE" ]]; then
+		port_dir="."
+	fi
 
-    ensure_directory "$port_dir" 700
-    umask 077
-    {
-        echo "# Managed by proton-qbittorrent-sync-safe.sh"
-        echo "QBT_PUBLISHED_PORT=$value"
-        echo "QBT_FORWARDED_PORT=$value"
-    } > "$QBT_PORT_ENV_FILE"
-    chmod 600 "$QBT_PORT_ENV_FILE"
+	ensure_directory "$port_dir" 700
+	umask 077
+	{
+		echo "# Managed by proton-qbittorrent-sync-safe.sh"
+		echo "QBT_PUBLISHED_PORT=$value"
+		echo "QBT_FORWARDED_PORT=$value"
+	} >"$QBT_PORT_ENV_FILE"
+	chmod 600 "$QBT_PORT_ENV_FILE"
 }
 
 write_published_port() {
-    write_published_port_value "$PORT"
+	write_published_port_value "$PORT"
 }
 
 disable_random_port() {
-    curl -fsS -b "$COOKIE_JAR" -X POST \
-        --data 'json={"random_port":false}' \
-        "$QBITTORRENT_URL/api/v2/app/setPreferences" >/dev/null
+	curl -fsS -b "$COOKIE_JAR" -X POST \
+		--data 'json={"random_port":false}' \
+		"$QBITTORRENT_URL/api/v2/app/setPreferences" >/dev/null
 }
 
 set_qbt_listen_port_value() {
-    local target_port="$1"
+	local target_port="$1"
 
-    curl -fsS -b "$COOKIE_JAR" -X POST \
-        --data "json={\"listen_port\":$target_port}" \
-        "$QBITTORRENT_URL/api/v2/app/setPreferences" >/dev/null
+	curl -fsS -b "$COOKIE_JAR" -X POST \
+		--data "json={\"listen_port\":$target_port}" \
+		"$QBITTORRENT_URL/api/v2/app/setPreferences" >/dev/null
 }
 
 ensure_qbt_listen_port_value() {
-    local target_port="$1"
-    local applied_port
+	local target_port="$1"
+	local applied_port
 
-    applied_port="$(qbt_get_listen_port "$COOKIE_JAR" || true)"
-    if [[ "$applied_port" == "$target_port" ]]; then
-        return 0
-    fi
+	applied_port="$(qbt_get_listen_port "$COOKIE_JAR" || true)"
+	if [[ "$applied_port" == "$target_port" ]]; then
+		return 0
+	fi
 
-    log "Updating qBittorrent listen port -> $target_port"
-    disable_random_port
-    set_qbt_listen_port_value "$target_port"
+	log "Updating qBittorrent listen port -> $target_port"
+	disable_random_port
+	set_qbt_listen_port_value "$target_port"
 
-    applied_port="$(qbt_get_listen_port "$COOKIE_JAR" || true)"
-    if [[ "$applied_port" != "$target_port" ]]; then
-        log "ERROR: qBittorrent did not apply port $target_port (reported: ${applied_port:-unknown})"
-        exit 1
-    fi
+	applied_port="$(qbt_get_listen_port "$COOKIE_JAR" || true)"
+	if [[ "$applied_port" != "$target_port" ]]; then
+		log "ERROR: qBittorrent did not apply port $target_port (reported: ${applied_port:-unknown})"
+		exit 1
+	fi
 }
 
 apply_qbt_listen_port() {
-    if [[ "$CURRENT_QBT_PORT" == "$PORT" ]]; then
-        return 0
-    fi
+	if [[ "$CURRENT_QBT_PORT" == "$PORT" ]]; then
+		return 0
+	fi
 
-    ensure_qbt_listen_port_value "$PORT"
-    LISTEN_PORT_CHANGED=1
+	ensure_qbt_listen_port_value "$PORT"
+	LISTEN_PORT_CHANGED=1
 }
 
 require_compose_mode_ready() {
-    require_command docker
+	require_command docker
 
-    if [[ -z "$QBT_COMPOSE_PROJECT_DIR" ]]; then
-        log "ERROR: QBT_COMPOSE_PROJECT_DIR is required in compose-recreate mode"
-        return 1
-    fi
+	if [[ -z "$QBT_COMPOSE_PROJECT_DIR" ]]; then
+		log "ERROR: QBT_COMPOSE_PROJECT_DIR is required in compose-recreate mode"
+		return 1
+	fi
 
-    if [[ ! -d "$QBT_COMPOSE_PROJECT_DIR" ]]; then
-        log "ERROR: Compose project directory not found: $QBT_COMPOSE_PROJECT_DIR"
-        return 1
-    fi
+	if [[ ! -d "$QBT_COMPOSE_PROJECT_DIR" ]]; then
+		log "ERROR: Compose project directory not found: $QBT_COMPOSE_PROJECT_DIR"
+		return 1
+	fi
 
-    if [[ -z "$QBT_COMPOSE_SERVICE" ]]; then
-        log "ERROR: QBT_COMPOSE_SERVICE is required in compose-recreate mode"
-        return 1
-    fi
+	if [[ -z "$QBT_COMPOSE_SERVICE" ]]; then
+		log "ERROR: QBT_COMPOSE_SERVICE is required in compose-recreate mode"
+		return 1
+	fi
 }
 
 respect_manual_stop_enabled() {
-    case "${QBT_RESPECT_MANUAL_STOP,,}" in
-    1 | true | yes | on)
-        return 0
-        ;;
-    *)
-        return 1
-        ;;
-    esac
+	case "${QBT_RESPECT_MANUAL_STOP,,}" in
+	1 | true | yes | on)
+		return 0
+		;;
+	*)
+		return 1
+		;;
+	esac
 }
 
 compose_container_ref_all() {
-    local container_id
+	local container_id
 
-    if [[ -n "${QBT_CONTAINER_NAME:-}" ]] && docker inspect "$QBT_CONTAINER_NAME" >/dev/null 2>&1; then
-        printf '%s\n' "$QBT_CONTAINER_NAME"
-        return 0
-    fi
+	if [[ -n "${QBT_CONTAINER_NAME:-}" ]] && docker inspect "$QBT_CONTAINER_NAME" >/dev/null 2>&1; then
+		printf '%s\n' "$QBT_CONTAINER_NAME"
+		return 0
+	fi
 
-    container_id="$(
-        cd "$QBT_COMPOSE_PROJECT_DIR"
-        DOCKER_CONFIG="$DOCKER_CONFIG_DIR" docker compose ps --all -q "$QBT_COMPOSE_SERVICE" 2>/dev/null \
-            | awk 'NF { last = $0 } END { print last }'
-    )"
+	container_id="$(
+		cd "$QBT_COMPOSE_PROJECT_DIR"
+		DOCKER_CONFIG="$DOCKER_CONFIG_DIR" docker compose ps --all -q "$QBT_COMPOSE_SERVICE" 2>/dev/null |
+			awk 'NF { last = $0 } END { print last }'
+	)"
 
-    [[ -n "$container_id" ]] || return 1
-    printf '%s\n' "$container_id"
+	[[ -n "$container_id" ]] || return 1
+	printf '%s\n' "$container_id"
 }
 
 compose_container_status() {
-    local container_ref
+	local container_ref
 
-    container_ref="$(compose_container_ref_all)" || return 1
-    docker inspect -f '{{.State.Status}}' "$container_ref" 2>/dev/null || true
+	container_ref="$(compose_container_ref_all)" || return 1
+	docker inspect -f '{{.State.Status}}' "$container_ref" 2>/dev/null || true
 }
 
 recent_manual_stop_event() {
-    local container_ref
-    local container_id
-    local container_id_short
-    local since
-    local until
+	local container_ref
+	local container_id
+	local container_id_short
+	local since
+	local until
 
-    [[ "$QBT_MANUAL_STOP_EVENT_GRACE_SECONDS" =~ ^[0-9]+$ ]] || return 1
-    (( QBT_MANUAL_STOP_EVENT_GRACE_SECONDS > 0 )) || return 1
+	[[ "$QBT_MANUAL_STOP_EVENT_GRACE_SECONDS" =~ ^[0-9]+$ ]] || return 1
+	((QBT_MANUAL_STOP_EVENT_GRACE_SECONDS > 0)) || return 1
 
-    container_ref="$(compose_container_ref_all)" || return 1
-    container_id="$(docker inspect -f '{{.Id}}' "$container_ref" 2>/dev/null || true)"
-    [[ -n "$container_id" ]] || return 1
-    container_id_short="${container_id:0:12}"
-    until="$(date +%s)"
-    since=$((until - QBT_MANUAL_STOP_EVENT_GRACE_SECONDS))
+	container_ref="$(compose_container_ref_all)" || return 1
+	container_id="$(docker inspect -f '{{.Id}}' "$container_ref" 2>/dev/null || true)"
+	[[ -n "$container_id" ]] || return 1
+	container_id_short="${container_id:0:12}"
+	until="$(date +%s)"
+	since=$((until - QBT_MANUAL_STOP_EVENT_GRACE_SECONDS))
 
-    if docker events \
-        --since "$since" \
-        --until "$until" \
-        --filter container="$container_ref" \
-        --format '{{.Action}}' 2>/dev/null \
-        | awk '$1 == "stop" || $1 == "die" || $1 == "destroy" || $1 == "kill" { found = 1 } END { exit found ? 0 : 1 }'; then
-        return 0
-    fi
+	if docker events \
+		--since "$since" \
+		--until "$until" \
+		--filter container="$container_ref" \
+		--format '{{.Action}}' 2>/dev/null |
+		awk '$1 == "stop" || $1 == "die" || $1 == "destroy" || $1 == "kill" { found = 1 } END { exit found ? 0 : 1 }'; then
+		return 0
+	fi
 
-    docker events \
-        --since "$since" \
-        --until "$until" \
-        --filter type=network \
-        --filter event=disconnect \
-        --format '{{.Actor.Attributes.container}}' 2>/dev/null \
-        | awk -v id="$container_id" -v short_id="$container_id_short" '
+	docker events \
+		--since "$since" \
+		--until "$until" \
+		--filter type=network \
+		--filter event=disconnect \
+		--format '{{.Actor.Attributes.container}}' 2>/dev/null |
+		awk -v id="$container_id" -v short_id="$container_id_short" '
             $1 == id || $1 == short_id { found = 1 }
             END { exit found ? 0 : 1 }
         '
 }
 
 skip_sync_for_manual_stop() {
-    local status
-    local container_label="${QBT_CONTAINER_NAME:-$QBT_COMPOSE_SERVICE}"
+	local status
+	local container_label="${QBT_CONTAINER_NAME:-$QBT_COMPOSE_SERVICE}"
 
-    respect_manual_stop_enabled || return 1
-    [[ "$QBT_PORT_APPLY_MODE" == "compose-recreate" ]] || return 1
-    require_compose_mode_ready || return 1
+	respect_manual_stop_enabled || return 1
+	[[ "$QBT_PORT_APPLY_MODE" == "compose-recreate" ]] || return 1
+	require_compose_mode_ready || return 1
 
-    status="$(compose_container_status || true)"
-    case "$status" in
-    created | exited | dead | removing)
-        log "qBittorrent container $container_label is $status; skipping sync because QBT_RESPECT_MANUAL_STOP=$QBT_RESPECT_MANUAL_STOP"
-        return 0
-        ;;
-    "")
-        log "qBittorrent container $container_label is absent; skipping sync because QBT_RESPECT_MANUAL_STOP=$QBT_RESPECT_MANUAL_STOP"
-        return 0
-        ;;
-    *)
-        if recent_manual_stop_event; then
-            log "qBittorrent container $container_label has a recent stop/disconnect event; skipping sync because QBT_RESPECT_MANUAL_STOP=$QBT_RESPECT_MANUAL_STOP"
-            return 0
-        fi
-        return 1
-        ;;
-    esac
+	status="$(compose_container_status || true)"
+	case "$status" in
+	created | exited | dead | removing)
+		log "qBittorrent container $container_label is $status; skipping sync because QBT_RESPECT_MANUAL_STOP=$QBT_RESPECT_MANUAL_STOP"
+		return 0
+		;;
+	"")
+		log "qBittorrent container $container_label is absent; skipping sync because QBT_RESPECT_MANUAL_STOP=$QBT_RESPECT_MANUAL_STOP"
+		return 0
+		;;
+	*)
+		if recent_manual_stop_event; then
+			log "qBittorrent container $container_label has a recent stop/disconnect event; skipping sync because QBT_RESPECT_MANUAL_STOP=$QBT_RESPECT_MANUAL_STOP"
+			return 0
+		fi
+		return 1
+		;;
+	esac
 }
 
 compose_container_ref() {
-    local container_id
+	local container_id
 
-    if [[ -n "${QBT_CONTAINER_NAME:-}" ]] && docker inspect "$QBT_CONTAINER_NAME" >/dev/null 2>&1; then
-        printf '%s\n' "$QBT_CONTAINER_NAME"
-        return 0
-    fi
+	if [[ -n "${QBT_CONTAINER_NAME:-}" ]] && docker inspect "$QBT_CONTAINER_NAME" >/dev/null 2>&1; then
+		printf '%s\n' "$QBT_CONTAINER_NAME"
+		return 0
+	fi
 
-    container_id="$(
-        cd "$QBT_COMPOSE_PROJECT_DIR"
-        DOCKER_CONFIG="$DOCKER_CONFIG_DIR" docker compose ps -q "$QBT_COMPOSE_SERVICE" 2>/dev/null \
-            | awk 'NF { last = $0 } END { print last }'
-    )"
+	container_id="$(
+		cd "$QBT_COMPOSE_PROJECT_DIR"
+		DOCKER_CONFIG="$DOCKER_CONFIG_DIR" docker compose ps -q "$QBT_COMPOSE_SERVICE" 2>/dev/null |
+			awk 'NF { last = $0 } END { print last }'
+	)"
 
-    [[ -n "$container_id" ]] || return 1
-    printf '%s\n' "$container_id"
+	[[ -n "$container_id" ]] || return 1
+	printf '%s\n' "$container_id"
 }
 
 compose_published_ports() {
-    local container_ref
+	local container_ref
 
-    container_ref="$(compose_container_ref)" || return 1
-    docker inspect -f '{{range $containerPort, $bindings := .NetworkSettings.Ports}}{{if $bindings}}{{range $bindings}}{{printf "%s %s\n" $containerPort .HostPort}}{{end}}{{end}}{{end}}' "$container_ref" 2>/dev/null || true
+	container_ref="$(compose_container_ref)" || return 1
+	docker inspect -f '{{range $containerPort, $bindings := .NetworkSettings.Ports}}{{if $bindings}}{{range $bindings}}{{printf "%s %s\n" $containerPort .HostPort}}{{end}}{{end}}{{end}}' "$container_ref" 2>/dev/null || true
 }
 
 compose_published_ports_summary() {
-    local ports
+	local ports
 
-    ports="$(compose_published_ports || true)"
-    if [[ -z "$ports" ]]; then
-        printf 'none'
-        return 0
-    fi
+	ports="$(compose_published_ports || true)"
+	if [[ -z "$ports" ]]; then
+		printf 'none'
+		return 0
+	fi
 
-    awk '
+	awk '
         {
             printf "%s%s->%s", sep, $1, $2
             sep = ", "
@@ -375,44 +374,44 @@ compose_published_ports_summary() {
         END {
             print ""
         }
-    ' <<< "$ports"
+    ' <<<"$ports"
 }
 
 compose_container_has_zombie_process() {
-    local container_ref="$1"
+	local container_ref="$1"
 
-    docker top "$container_ref" -eo pid,stat,cmd 2>/dev/null \
-        | awk 'NR > 1 && $2 ~ /^Z/ { found = 1 } END { exit found ? 0 : 1 }'
+	docker top "$container_ref" -eo pid,stat,cmd 2>/dev/null |
+		awk 'NR > 1 && $2 ~ /^Z/ { found = 1 } END { exit found ? 0 : 1 }'
 }
 
 compose_container_is_wedged_for_recreate() {
-    local container_ref
-    local status
-    local ports
+	local container_ref
+	local status
+	local ports
 
-    container_ref="$(compose_container_ref_all)" || return 1
-    status="$(docker inspect -f '{{.State.Status}}' "$container_ref" 2>/dev/null || true)"
-    [[ "$status" == "running" ]] || return 1
+	container_ref="$(compose_container_ref_all)" || return 1
+	status="$(docker inspect -f '{{.State.Status}}' "$container_ref" 2>/dev/null || true)"
+	[[ "$status" == "running" ]] || return 1
 
-    if compose_container_has_zombie_process "$container_ref"; then
-        log "ERROR: qBittorrent container ${QBT_CONTAINER_NAME:-$container_ref} is running with a zombie process (published ports: $(compose_published_ports_summary)); refusing Compose recreate to avoid hanging on Docker stop. Stop proton services and clear the stuck container cgroup/shim before recreating."
-        return 0
-    fi
+	if compose_container_has_zombie_process "$container_ref"; then
+		log "ERROR: qBittorrent container ${QBT_CONTAINER_NAME:-$container_ref} is running with a zombie process (published ports: $(compose_published_ports_summary)); refusing Compose recreate to avoid hanging on Docker stop. Stop proton services and clear the stuck container cgroup/shim before recreating."
+		return 0
+	fi
 
-    ports="$(compose_published_ports || true)"
-    [[ -z "$ports" ]] || return 1
+	ports="$(compose_published_ports || true)"
+	[[ -z "$ports" ]] || return 1
 
-    log "ERROR: qBittorrent container ${QBT_CONTAINER_NAME:-$container_ref} is running with no published ports; refusing Compose self-heal recreate to avoid Docker name-conflict orphan loop. Stop proton services and clear the stuck container cgroup/shim before recreating."
-    return 0
+	log "ERROR: qBittorrent container ${QBT_CONTAINER_NAME:-$container_ref} is running with no published ports; refusing Compose self-heal recreate to avoid Docker name-conflict orphan loop. Stop proton services and clear the stuck container cgroup/shim before recreating."
+	return 0
 }
 
 compose_current_published_port() {
-    local ports
+	local ports
 
-    ports="$(compose_published_ports || true)"
-    [[ -n "$ports" ]] || return 1
+	ports="$(compose_published_ports || true)"
+	[[ -n "$ports" ]] || return 1
 
-    awk '
+	awk '
         $1 ~ /\/tcp$/ && $2 ~ /^[0-9]+$/ { tcp[$2] = 1 }
         $1 ~ /\/udp$/ && $2 ~ /^[0-9]+$/ { udp[$2] = 1 }
         END {
@@ -424,163 +423,163 @@ compose_current_published_port() {
             }
             exit 1
         }
-    ' <<< "$ports"
+    ' <<<"$ports"
 }
 
 compose_service_publishes_port() {
-    local target_port="$1"
-    local ports
+	local target_port="$1"
+	local ports
 
-    ports="$(compose_published_ports || true)"
-    [[ -n "$ports" ]] || return 1
+	ports="$(compose_published_ports || true)"
+	[[ -n "$ports" ]] || return 1
 
-    awk -v target_port="$target_port" '
+	awk -v target_port="$target_port" '
         $1 ~ /\/tcp$/ && $2 == target_port { tcp = 1 }
         $1 ~ /\/udp$/ && $2 == target_port { udp = 1 }
         END { exit (tcp && udp) ? 0 : 1 }
-    ' <<< "$ports"
+    ' <<<"$ports"
 }
 
 clean_stale_qbt_lock() {
-    # qBittorrent uses a single-instance lock (lockfile + ipc-socket) under its
-    # config dir. When a recreate hits stop_grace_period and Docker SIGKILLs the
-    # container, these artifacts are left behind and the next qBittorrent refuses
-    # to bind its Web UI, which makes every port sync fail and the container loop
-    # unhealthy. Remove them while the service is being recreated (it is stopped
-    # at this point) so the fresh container can start cleanly.
-    local config_dir="$QBT_CONFIG_DIR"
-    local artifact
+	# qBittorrent uses a single-instance lock (lockfile + ipc-socket) under its
+	# config dir. When a recreate hits stop_grace_period and Docker SIGKILLs the
+	# container, these artifacts are left behind and the next qBittorrent refuses
+	# to bind its Web UI, which makes every port sync fail and the container loop
+	# unhealthy. Remove them while the service is being recreated (it is stopped
+	# at this point) so the fresh container can start cleanly.
+	local config_dir="$QBT_CONFIG_DIR"
+	local artifact
 
-    [[ -n "$config_dir" ]] || return 0
+	[[ -n "$config_dir" ]] || return 0
 
-    for artifact in "${config_dir%/}/qBittorrent/lockfile" "${config_dir%/}/qBittorrent/ipc-socket"; do
-        if [[ -e "$artifact" ]]; then
-            log "Removing stale qBittorrent artifact before recreate: $artifact"
-            rm -f "$artifact"
-        fi
-    done
+	for artifact in "${config_dir%/}/qBittorrent/lockfile" "${config_dir%/}/qBittorrent/ipc-socket"; do
+		if [[ -e "$artifact" ]]; then
+			log "Removing stale qBittorrent artifact before recreate: $artifact"
+			rm -f "$artifact"
+		fi
+	done
 }
 
 run_compose_recreate() {
-    local target_port="$1"
-    local attempt=1
-    local exit_code=0
-    local output_file
+	local target_port="$1"
+	local attempt=1
+	local exit_code=0
+	local output_file
 
-    output_file="$(mktemp)"
-    while (( attempt <= QBT_COMPOSE_RECREATE_RETRIES )); do
-        (
-            cd "$QBT_COMPOSE_PROJECT_DIR"
-            DOCKER_CONFIG="$DOCKER_CONFIG_DIR" docker compose stop "$QBT_COMPOSE_SERVICE"
-        ) >/dev/null 2>&1 || true
-        clean_stale_qbt_lock
-        if (
-            cd "$QBT_COMPOSE_PROJECT_DIR"
-            DOCKER_CONFIG="$DOCKER_CONFIG_DIR" \
-                QBT_PUBLISHED_PORT="$target_port" \
-                docker compose up -d --force-recreate --no-deps "$QBT_COMPOSE_SERVICE"
-        ) >"$output_file" 2>&1; then
-            if [[ -s "$output_file" ]]; then
-                cat "$output_file"
-            fi
-            rm -f "$output_file"
-            return 0
-        else
-            exit_code=$?
-        fi
+	output_file="$(mktemp)"
+	while ((attempt <= QBT_COMPOSE_RECREATE_RETRIES)); do
+		(
+			cd "$QBT_COMPOSE_PROJECT_DIR"
+			DOCKER_CONFIG="$DOCKER_CONFIG_DIR" docker compose stop "$QBT_COMPOSE_SERVICE"
+		) >/dev/null 2>&1 || true
+		clean_stale_qbt_lock
+		if (
+			cd "$QBT_COMPOSE_PROJECT_DIR"
+			DOCKER_CONFIG="$DOCKER_CONFIG_DIR" \
+				QBT_PUBLISHED_PORT="$target_port" \
+				docker compose up -d --force-recreate --no-deps "$QBT_COMPOSE_SERVICE"
+		) >"$output_file" 2>&1; then
+			if [[ -s "$output_file" ]]; then
+				cat "$output_file"
+			fi
+			rm -f "$output_file"
+			return 0
+		else
+			exit_code=$?
+		fi
 
-        if [[ -s "$output_file" ]]; then
-            cat "$output_file"
-        fi
+		if [[ -s "$output_file" ]]; then
+			cat "$output_file"
+		fi
 
-        if (( attempt < QBT_COMPOSE_RECREATE_RETRIES )) && grep -Eq "address already in use|port is already allocated" "$output_file"; then
-            log "Compose recreate hit a busy host port for $target_port (attempt $attempt/$QBT_COMPOSE_RECREATE_RETRIES); retrying in ${QBT_COMPOSE_RECREATE_RETRY_DELAY}s"
-            sleep "$QBT_COMPOSE_RECREATE_RETRY_DELAY"
-            attempt=$((attempt + 1))
-            continue
-        fi
+		if ((attempt < QBT_COMPOSE_RECREATE_RETRIES)) && grep -Eq "address already in use|port is already allocated" "$output_file"; then
+			log "Compose recreate hit a busy host port for $target_port (attempt $attempt/$QBT_COMPOSE_RECREATE_RETRIES); retrying in ${QBT_COMPOSE_RECREATE_RETRY_DELAY}s"
+			sleep "$QBT_COMPOSE_RECREATE_RETRY_DELAY"
+			attempt=$((attempt + 1))
+			continue
+		fi
 
-        rm -f "$output_file"
-        return "$exit_code"
-    done
+		rm -f "$output_file"
+		return "$exit_code"
+	done
 
-    rm -f "$output_file"
-    return "$exit_code"
+	rm -f "$output_file"
+	return "$exit_code"
 }
 
 recreate_qbt_service_compose() {
-    local target_port="$1"
+	local target_port="$1"
 
-    log "Recreating Compose service $QBT_COMPOSE_SERVICE in $QBT_COMPOSE_PROJECT_DIR for published port $target_port"
-    ensure_directory "$DOCKER_CONFIG_DIR" 700
-    if compose_container_is_wedged_for_recreate; then
-        return 1
-    fi
+	log "Recreating Compose service $QBT_COMPOSE_SERVICE in $QBT_COMPOSE_PROJECT_DIR for published port $target_port"
+	ensure_directory "$DOCKER_CONFIG_DIR" 700
+	if compose_container_is_wedged_for_recreate; then
+		return 1
+	fi
 
-    if ! run_compose_recreate "$target_port"; then
-        return 1
-    fi
+	if ! run_compose_recreate "$target_port"; then
+		return 1
+	fi
 
-    if ! qbt_wait_for_webui 12 5; then
-        log "ERROR: qBittorrent Web UI did not become reachable after recreating $QBT_COMPOSE_SERVICE"
-        return 1
-    fi
+	if ! qbt_wait_for_webui 12 5; then
+		log "ERROR: qBittorrent Web UI did not become reachable after recreating $QBT_COMPOSE_SERVICE"
+		return 1
+	fi
 
-    if ! qbt_login "$COOKIE_JAR"; then
-        log "ERROR: ${QBT_LOGIN_ERROR:-qBittorrent login failed after recreating $QBT_COMPOSE_SERVICE}"
-        return 1
-    fi
+	if ! qbt_login "$COOKIE_JAR"; then
+		log "ERROR: ${QBT_LOGIN_ERROR:-qBittorrent login failed after recreating $QBT_COMPOSE_SERVICE}"
+		return 1
+	fi
 
-    if ! ensure_qbt_listen_port_value "$target_port"; then
-        log "ERROR: qBittorrent reported a different port after recreating $QBT_COMPOSE_SERVICE"
-        return 1
-    fi
+	if ! ensure_qbt_listen_port_value "$target_port"; then
+		log "ERROR: qBittorrent reported a different port after recreating $QBT_COMPOSE_SERVICE"
+		return 1
+	fi
 
-    if ! compose_service_publishes_port "$target_port"; then
-        log "ERROR: Docker did not publish qBittorrent TCP/UDP port $target_port after recreating $QBT_COMPOSE_SERVICE (actual: $(compose_published_ports_summary))"
-        return 1
-    fi
+	if ! compose_service_publishes_port "$target_port"; then
+		log "ERROR: Docker did not publish qBittorrent TCP/UDP port $target_port after recreating $QBT_COMPOSE_SERVICE (actual: $(compose_published_ports_summary))"
+		return 1
+	fi
 }
 
 restart_qbt_container_legacy() {
-    if [[ -z "${QBT_CONTAINER_NAME:-}" ]]; then
-        log "WARNING: QBT_CONTAINER_NAME is not set; qBittorrent will use the new port after its next restart"
-        return 0
-    fi
+	if [[ -z "${QBT_CONTAINER_NAME:-}" ]]; then
+		log "WARNING: QBT_CONTAINER_NAME is not set; qBittorrent will use the new port after its next restart"
+		return 0
+	fi
 
-    require_command docker
+	require_command docker
 
-    log "Restarting qBittorrent container $QBT_CONTAINER_NAME to apply listen port $PORT"
-    docker restart "$QBT_CONTAINER_NAME" >/dev/null
+	log "Restarting qBittorrent container $QBT_CONTAINER_NAME to apply listen port $PORT"
+	docker restart "$QBT_CONTAINER_NAME" >/dev/null
 
-    if ! qbt_wait_for_webui 12 5; then
-        log "ERROR: qBittorrent Web UI did not become reachable after restarting $QBT_CONTAINER_NAME"
-        return 1
-    fi
+	if ! qbt_wait_for_webui 12 5; then
+		log "ERROR: qBittorrent Web UI did not become reachable after restarting $QBT_CONTAINER_NAME"
+		return 1
+	fi
 
-    if ! qbt_login "$COOKIE_JAR"; then
-        log "ERROR: ${QBT_LOGIN_ERROR:-qBittorrent login failed after restarting $QBT_CONTAINER_NAME}"
-        return 1
-    fi
+	if ! qbt_login "$COOKIE_JAR"; then
+		log "ERROR: ${QBT_LOGIN_ERROR:-qBittorrent login failed after restarting $QBT_CONTAINER_NAME}"
+		return 1
+	fi
 
-    if [[ "$(qbt_get_listen_port "$COOKIE_JAR" || true)" != "$PORT" ]]; then
-        log "ERROR: qBittorrent reported a different port after restarting $QBT_CONTAINER_NAME"
-        return 1
-    fi
+	if [[ "$(qbt_get_listen_port "$COOKIE_JAR" || true)" != "$PORT" ]]; then
+		log "ERROR: qBittorrent reported a different port after restarting $QBT_CONTAINER_NAME"
+		return 1
+	fi
 }
 
 container_network_mode() {
-    docker inspect -f '{{.HostConfig.NetworkMode}}' "$QBT_CONTAINER_NAME" 2>/dev/null || true
+	docker inspect -f '{{.HostConfig.NetworkMode}}' "$QBT_CONTAINER_NAME" 2>/dev/null || true
 }
 
 resolve_container_ip() {
-    local networks
+	local networks
 
-    networks="$(docker inspect -f '{{range $name, $network := .NetworkSettings.Networks}}{{printf "%s=%s\n" $name $network.IPAddress}}{{end}}' "$QBT_CONTAINER_NAME" 2>/dev/null || true)"
+	networks="$(docker inspect -f '{{range $name, $network := .NetworkSettings.Networks}}{{printf "%s=%s\n" $name $network.IPAddress}}{{end}}' "$QBT_CONTAINER_NAME" 2>/dev/null || true)"
 
-    [[ -n "$networks" ]] || return 1
+	[[ -n "$networks" ]] || return 1
 
-    awk -F= -v wanted="${QBT_NETWORK_NAME:-}" '
+	awk -F= -v wanted="${QBT_NETWORK_NAME:-}" '
         NF != 2 || $2 == "" { next }
         first == "" { first = $2 }
         wanted != "" && $1 == wanted {
@@ -593,87 +592,87 @@ resolve_container_ip() {
                 print first
             }
         }
-    ' <<< "$networks"
+    ' <<<"$networks"
 }
 
 ensure_qbt_dnat_chain() {
-    nft list table ip proton_nat >/dev/null 2>&1 || nft add table ip proton_nat
-    nft list chain ip proton_nat prerouting >/dev/null 2>&1 || \
-        nft 'add chain ip proton_nat prerouting { type nat hook prerouting priority dstnat; policy accept; }'
+	nft list table ip proton_nat >/dev/null 2>&1 || nft add table ip proton_nat
+	nft list chain ip proton_nat prerouting >/dev/null 2>&1 ||
+		nft 'add chain ip proton_nat prerouting { type nat hook prerouting priority dstnat; policy accept; }'
 }
 
 dnat_rule_present() {
-    local proto="$1"
+	local proto="$1"
 
-    nft list chain ip proton_nat prerouting 2>/dev/null \
-        | grep -F "${proto} dport ${PORT} dnat to ${CONTAINER_IP}:${QBT_INTERNAL_PORT}" >/dev/null 2>&1
+	nft list chain ip proton_nat prerouting 2>/dev/null |
+		grep -F "${proto} dport ${PORT} dnat to ${CONTAINER_IP}:${QBT_INTERNAL_PORT}" >/dev/null 2>&1
 }
 
 refresh_qbt_dnat_legacy() {
-    local network_mode
+	local network_mode
 
-    if [[ -z "${QBT_CONTAINER_NAME:-}" ]]; then
-        return 0
-    fi
+	if [[ -z "${QBT_CONTAINER_NAME:-}" ]]; then
+		return 0
+	fi
 
-    require_command docker
-    require_command nft
+	require_command docker
+	require_command nft
 
-    network_mode="$(container_network_mode)"
-    if [[ "$network_mode" == "host" ]]; then
-        if [[ -x "$DNAT_CLEANUP_SCRIPT" ]]; then
-            "$DNAT_CLEANUP_SCRIPT" "$INSTANCE" || true
-        fi
-        log "qBittorrent container $QBT_CONTAINER_NAME uses host networking; DNAT refresh skipped"
-        return 0
-    fi
+	network_mode="$(container_network_mode)"
+	if [[ "$network_mode" == "host" ]]; then
+		if [[ -x "$DNAT_CLEANUP_SCRIPT" ]]; then
+			"$DNAT_CLEANUP_SCRIPT" "$INSTANCE" || true
+		fi
+		log "qBittorrent container $QBT_CONTAINER_NAME uses host networking; DNAT refresh skipped"
+		return 0
+	fi
 
-    CONTAINER_IP="$(resolve_container_ip || true)"
-    if [[ -z "$CONTAINER_IP" ]]; then
-        log "ERROR: Could not resolve a container IP for $QBT_CONTAINER_NAME"
-        return 1
-    fi
+	CONTAINER_IP="$(resolve_container_ip || true)"
+	if [[ -z "$CONTAINER_IP" ]]; then
+		log "ERROR: Could not resolve a container IP for $QBT_CONTAINER_NAME"
+		return 1
+	fi
 
-    if dnat_rule_present tcp && dnat_rule_present udp; then
-        return 0
-    fi
+	if dnat_rule_present tcp && dnat_rule_present udp; then
+		return 0
+	fi
 
-    if [[ -x "$DNAT_CLEANUP_SCRIPT" ]]; then
-        "$DNAT_CLEANUP_SCRIPT" "$INSTANCE" || true
-    fi
+	if [[ -x "$DNAT_CLEANUP_SCRIPT" ]]; then
+		"$DNAT_CLEANUP_SCRIPT" "$INSTANCE" || true
+	fi
 
-    ensure_qbt_dnat_chain
-    nft add rule ip proton_nat prerouting tcp dport "$PORT" dnat to "${CONTAINER_IP}:${QBT_INTERNAL_PORT}" comment "qbt-dnat-${INSTANCE}"
-    nft add rule ip proton_nat prerouting udp dport "$PORT" dnat to "${CONTAINER_IP}:${QBT_INTERNAL_PORT}" comment "qbt-dnat-${INSTANCE}"
-    DNAT_CHANGED=1
-    log "Updated qBittorrent DNAT: public port $PORT -> ${CONTAINER_IP}:${QBT_INTERNAL_PORT}"
+	ensure_qbt_dnat_chain
+	nft add rule ip proton_nat prerouting tcp dport "$PORT" dnat to "${CONTAINER_IP}:${QBT_INTERNAL_PORT}" comment "qbt-dnat-${INSTANCE}"
+	nft add rule ip proton_nat prerouting udp dport "$PORT" dnat to "${CONTAINER_IP}:${QBT_INTERNAL_PORT}" comment "qbt-dnat-${INSTANCE}"
+	DNAT_CHANGED=1
+	log "Updated qBittorrent DNAT: public port $PORT -> ${CONTAINER_IP}:${QBT_INTERNAL_PORT}"
 }
 
 if ! qbt_login "$COOKIE_JAR"; then
-    if skip_sync_for_manual_stop; then
-        exit 0
-    fi
+	if skip_sync_for_manual_stop; then
+		exit 0
+	fi
 
-    # A container that is wedged on a stale single-instance lock never binds its
-    # Web UI, so the very first login fails and the normal recreate path below is
-    # never reached. In compose-recreate mode, attempt one lock-clearing recreate
-    # so the loop can self-heal instead of looping on "Web UI unreachable".
-    if [[ "$QBT_PORT_APPLY_MODE" == "compose-recreate" ]] && require_compose_mode_ready; then
-        log "qBittorrent Web UI unreachable on startup; attempting self-heal recreate on port $PORT"
-        if compose_container_is_wedged_for_recreate; then
-            log "ERROR: ${QBT_LOGIN_ERROR:-qBittorrent login failed}"
-            exit 1
-        fi
+	# A container that is wedged on a stale single-instance lock never binds its
+	# Web UI, so the very first login fails and the normal recreate path below is
+	# never reached. In compose-recreate mode, attempt one lock-clearing recreate
+	# so the loop can self-heal instead of looping on "Web UI unreachable".
+	if [[ "$QBT_PORT_APPLY_MODE" == "compose-recreate" ]] && require_compose_mode_ready; then
+		log "qBittorrent Web UI unreachable on startup; attempting self-heal recreate on port $PORT"
+		if compose_container_is_wedged_for_recreate; then
+			log "ERROR: ${QBT_LOGIN_ERROR:-qBittorrent login failed}"
+			exit 1
+		fi
 
-        write_published_port
-        if recreate_qbt_service_compose "$PORT"; then
-            write_cache
-            log "qBittorrent recovered via self-heal recreate on port $PORT"
-            exit 0
-        fi
-    fi
-    log "ERROR: ${QBT_LOGIN_ERROR:-qBittorrent login failed}"
-    exit 1
+		write_published_port
+		if recreate_qbt_service_compose "$PORT"; then
+			write_cache
+			log "qBittorrent recovered via self-heal recreate on port $PORT"
+			exit 0
+		fi
+	fi
+	log "ERROR: ${QBT_LOGIN_ERROR:-qBittorrent login failed}"
+	exit 1
 fi
 
 CURRENT_QBT_PORT="$(qbt_get_listen_port "$COOKIE_JAR" || true)"
@@ -683,73 +682,73 @@ PUBLISHED_PORT_CHANGED=0
 DNAT_CHANGED=0
 
 if [[ -n "$CURRENT_PUBLISHED_PORT" && ! "$CURRENT_PUBLISHED_PORT" =~ ^[0-9]+$ ]]; then
-    log "ERROR: Invalid QBT_PUBLISHED_PORT value in $QBT_PORT_ENV_FILE: $CURRENT_PUBLISHED_PORT"
-    exit 1
+	log "ERROR: Invalid QBT_PUBLISHED_PORT value in $QBT_PORT_ENV_FILE: $CURRENT_PUBLISHED_PORT"
+	exit 1
 fi
 
 apply_qbt_listen_port
 
 case "$QBT_PORT_APPLY_MODE" in
 compose-recreate)
-    require_compose_mode_ready || exit 1
-    CURRENT_DOCKER_PUBLISHED_PORT="$(compose_current_published_port || true)"
-    COMPOSE_PORTS_MATCH=0
-    if compose_service_publishes_port "$PORT"; then
-        COMPOSE_PORTS_MATCH=1
-    fi
+	require_compose_mode_ready || exit 1
+	CURRENT_DOCKER_PUBLISHED_PORT="$(compose_current_published_port || true)"
+	COMPOSE_PORTS_MATCH=0
+	if compose_service_publishes_port "$PORT"; then
+		COMPOSE_PORTS_MATCH=1
+	fi
 
-    if [[ "$CURRENT_PUBLISHED_PORT" != "$PORT" ]] || (( ! COMPOSE_PORTS_MATCH )); then
-        rollback_port=""
+	if [[ "$CURRENT_PUBLISHED_PORT" != "$PORT" ]] || ((!COMPOSE_PORTS_MATCH)); then
+		rollback_port=""
 
-        if [[ "$CURRENT_PUBLISHED_PORT" != "$PORT" ]]; then
-            log "Updating qBittorrent published port artifact -> $PORT"
-            rollback_port="$CURRENT_PUBLISHED_PORT"
-        else
-            log "Docker published ports are stale for qBittorrent; expected TCP/UDP $PORT, actual: $(compose_published_ports_summary)"
-            rollback_port="$CURRENT_DOCKER_PUBLISHED_PORT"
-        fi
+		if [[ "$CURRENT_PUBLISHED_PORT" != "$PORT" ]]; then
+			log "Updating qBittorrent published port artifact -> $PORT"
+			rollback_port="$CURRENT_PUBLISHED_PORT"
+		else
+			log "Docker published ports are stale for qBittorrent; expected TCP/UDP $PORT, actual: $(compose_published_ports_summary)"
+			rollback_port="$CURRENT_DOCKER_PUBLISHED_PORT"
+		fi
 
-        write_published_port
-        PUBLISHED_PORT_CHANGED=1
-        if ! recreate_qbt_service_compose "$PORT"; then
-            if [[ -n "$rollback_port" ]]; then
-                log "Restoring qBittorrent published port artifact -> $rollback_port"
-                write_published_port_value "$rollback_port"
-                if recreate_qbt_service_compose "$rollback_port"; then
-                    log "Restored qBittorrent service on previous published port $rollback_port after failed recreate for $PORT"
-                else
-                    log "ERROR: Failed to restore qBittorrent service on previous published port $rollback_port"
-                fi
-            else
-                log "Removing qBittorrent published port artifact after failed recreate for $PORT"
-                rm -f "$QBT_PORT_ENV_FILE"
-            fi
+		write_published_port
+		PUBLISHED_PORT_CHANGED=1
+		if ! recreate_qbt_service_compose "$PORT"; then
+			if [[ -n "$rollback_port" ]]; then
+				log "Restoring qBittorrent published port artifact -> $rollback_port"
+				write_published_port_value "$rollback_port"
+				if recreate_qbt_service_compose "$rollback_port"; then
+					log "Restored qBittorrent service on previous published port $rollback_port after failed recreate for $PORT"
+				else
+					log "ERROR: Failed to restore qBittorrent service on previous published port $rollback_port"
+				fi
+			else
+				log "Removing qBittorrent published port artifact after failed recreate for $PORT"
+				rm -f "$QBT_PORT_ENV_FILE"
+			fi
 
-            if [[ -n "$rollback_port" ]]; then
-                write_cache_value "$rollback_port"
-            else
-                rm -f "$CACHE_FILE"
-            fi
-            exit 1
-        fi
-    fi
-    ;;
+			if [[ -n "$rollback_port" ]]; then
+				write_cache_value "$rollback_port"
+			else
+				rm -f "$CACHE_FILE"
+			fi
+			exit 1
+		fi
+	fi
+	;;
 legacy-dnat)
-    if (( LISTEN_PORT_CHANGED )); then
-        restart_qbt_container_legacy || exit 1
-    fi
-    refresh_qbt_dnat_legacy || exit 1
-    ;;
+	if ((LISTEN_PORT_CHANGED)); then
+		restart_qbt_container_legacy || exit 1
+	fi
+	refresh_qbt_dnat_legacy || exit 1
+	;;
 esac
 
 write_cache
 
-if (( PUBLISHED_PORT_CHANGED )); then
-    log "qBittorrent updated successfully with Compose recreation"
-elif (( LISTEN_PORT_CHANGED )); then
-    log "qBittorrent updated successfully"
-elif (( DNAT_CHANGED )); then
-    log "qBittorrent DNAT refreshed successfully"
+if ((PUBLISHED_PORT_CHANGED)); then
+	log "qBittorrent updated successfully with Compose recreation"
+elif ((LISTEN_PORT_CHANGED)); then
+	log "qBittorrent updated successfully"
+elif ((DNAT_CHANGED)); then
+	log "qBittorrent DNAT refreshed successfully"
 else
-    log "qBittorrent already using port $PORT"
+	log "qBittorrent already using port $PORT"
 fi

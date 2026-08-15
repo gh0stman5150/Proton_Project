@@ -122,7 +122,10 @@ find_network_cidr6() {
 	local cidr=""
 	local network="${QBT_NETWORK_NAME:-}"
 
-	command -v docker >/dev/null 2>&1 || { echo ""; return 0; }
+	command -v docker >/dev/null 2>&1 || {
+		echo ""
+		return 0
+	}
 	if [[ -z "$network" ]]; then
 		network="$(docker network ls --format '{{.Name}}' | grep -i starr | head -n1 || true)"
 	fi
@@ -427,43 +430,42 @@ main() {
 	reapply_killswitch
 	refresh_qb_state
 
-if command -v docker >/dev/null 2>&1; then
-	log "Starting docker events watch (debounce ${DEBOUNCE_SECONDS}s)"
-	while true; do
-		# Listen to network/container events and debounce updates
-		docker events \
-			--filter 'type=network' --filter 'type=container' \
-			--format '{{.Type}}:{{.Action}}:{{.Actor.Attributes.name}}' 2>/dev/null |
-			while IFS= read -r ev; do
-				case "$ev" in
-				*:create:* | *:connect:* | *:disconnect:* | *:start:* | *:destroy:*)
-					log "Docker event: $ev -- waiting ${DEBOUNCE_SECONDS}s"
-					sleep "$DEBOUNCE_SECONDS"
-					cidr=$(find_network_cidr)
-					cidr6=$(find_network_cidr6)
-					reapply_routes "$cidr" "$cidr6"
-					reapply_killswitch
-					refresh_qb_state
-					;;
-				*)
-					;;
-				esac
-			done
+	if command -v docker >/dev/null 2>&1; then
+		log "Starting docker events watch (debounce ${DEBOUNCE_SECONDS}s)"
+		while true; do
+			# Listen to network/container events and debounce updates
+			docker events \
+				--filter 'type=network' --filter 'type=container' \
+				--format '{{.Type}}:{{.Action}}:{{.Actor.Attributes.name}}' 2>/dev/null |
+				while IFS= read -r ev; do
+					case "$ev" in
+					*:create:* | *:connect:* | *:disconnect:* | *:start:* | *:destroy:*)
+						log "Docker event: $ev -- waiting ${DEBOUNCE_SECONDS}s"
+						sleep "$DEBOUNCE_SECONDS"
+						cidr=$(find_network_cidr)
+						cidr6=$(find_network_cidr6)
+						reapply_routes "$cidr" "$cidr6"
+						reapply_killswitch
+						refresh_qb_state
+						;;
+					*) ;;
+					esac
+				done
 
-		log "docker events stream exited; retrying in 5s"
-		sleep 5
-	done
-else
-	log "docker CLI not present; running periodic check every ${POLL_INTERVAL}s"
-	while true; do
-		sleep "$POLL_INTERVAL"
-		cidr=$(find_network_cidr)
-		cidr6=$(find_network_cidr6)
-		reapply_routes "$cidr" "$cidr6"
-		reapply_killswitch
-		refresh_qb_state
-	done
-fi
+			log "docker events stream exited; retrying in 5s"
+			sleep 5
+		done
+	else
+		log "docker CLI not present; running periodic check every ${POLL_INTERVAL}s"
+		while true; do
+			sleep "$POLL_INTERVAL"
+			cidr=$(find_network_cidr)
+			cidr6=$(find_network_cidr6)
+			reapply_routes "$cidr" "$cidr6"
+			reapply_killswitch
+			refresh_qb_state
+		done
+	fi
 }
 
 if [[ "${PROTON_WATCHER_SOURCE_ONLY:-0}" != 1 ]]; then

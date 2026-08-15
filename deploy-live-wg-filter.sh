@@ -12,10 +12,10 @@ echo "Deployed proton-wg-up-safe.sh and proton-wg-down-safe.sh to $LIVE_DIR"
 
 INSTANCES=(lidarr radarr sonarr whisparr prowlarr)
 for instance in "${INSTANCES[@]}"; do
-    for svc in "proton-port-forward@${instance}.service" "proton-healthcheck@${instance}.service"; do
-        if systemctl is-active --quiet "$svc" 2>/dev/null; then
-            systemctl restart "$svc"
-            echo "Restarted $svc"
-        fi
-    done
+	for svc in "proton-port-forward@${instance}.service" "proton-healthcheck@${instance}.service"; do
+		if systemctl is-active --quiet "$svc" 2>/dev/null; then
+			systemctl restart "$svc"
+			echo "Restarted $svc"
+		fi
+	done
 done
