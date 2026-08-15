@@ -34,5 +34,10 @@
   grep -Fq 'printf '"'"'%s\n'"'"' pvprowl' install-proton-systemd.sh
   grep -Fq 'QBT_CONTAINER_NAME=qbittorrent-${instance}' install-proton-systemd.sh
   grep -Fq 'QBT_COMPOSE_PROJECT_DIR=/opt/qbittorrent-${instance}' install-proton-systemd.sh
+  grep -Fq 'QBT_COMPOSE_SERVICE=qbittorrent-${instance}' install-proton-systemd.sh
   grep -Fq 'QBT_PORT_ENV_FILE=${ETC_PROTON_DIR}/instances/${instance}/qbittorrent-port.env' install-proton-systemd.sh
+}
+
+@test "instance normalizer applies unique Compose service names" {
+  grep -Fq 'QBT_COMPOSE_SERVICE=qbittorrent-$inst' proton-instances-normalize.sh
 }

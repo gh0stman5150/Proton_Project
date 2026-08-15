@@ -95,6 +95,12 @@ for inst_path in "$INSTANCES_DIR"/*; do
             echo "QBT_COMPOSE_PROJECT_DIR=/opt/qbittorrent-$inst" >> "$dest_qbt_env"
         fi
 
+        if grep -q '^QBT_COMPOSE_SERVICE=' "$dest_qbt_env" 2>/dev/null; then
+            sed -i -E "s|^QBT_COMPOSE_SERVICE=.*|QBT_COMPOSE_SERVICE=qbittorrent-$inst|" "$dest_qbt_env" || true
+        else
+            echo "QBT_COMPOSE_SERVICE=qbittorrent-$inst" >> "$dest_qbt_env"
+        fi
+
         if grep -q '^QBT_PORT_ENV_FILE=' "$dest_qbt_env" 2>/dev/null; then
             sed -i -E "s|^QBT_PORT_ENV_FILE=.*|QBT_PORT_ENV_FILE=/etc/proton/instances/$inst/qbittorrent-port.env|" "$dest_qbt_env" || true
         else

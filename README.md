@@ -135,6 +135,11 @@ The installer creates example files under `/etc/proton/instances/<instance>/`:
 
 Copy those to `proton.env` and `qbittorrent.env`, then keep real config files root owned with mode `600`. The generated defaults use:
 
+Each instance uses the same unique `qbittorrent-<instance>` value for both
+`QBT_CONTAINER_NAME` and `QBT_COMPOSE_SERVICE`. This prevents Docker DNS alias
+collisions on a shared network while allowing the port-forward synchronizer to
+recreate the correct Compose service.
+
 | Instance   | qBittorrent            | Web UI | Interface  | Tunnel subnet |
 | ---        | ---                    | ---    | ---        | ---           |
 | `lidarr`   | `qbittorrent-lidarr`   | `8081` | `pvlidarr` | `10.2.0.2/32` |

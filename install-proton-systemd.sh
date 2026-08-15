@@ -611,7 +611,7 @@ QBITTORRENT_PASS=change-me
 
 QBT_CONTAINER_NAME=qbittorrent-${instance}
 QBT_COMPOSE_PROJECT_DIR=/opt/qbittorrent-${instance}
-QBT_COMPOSE_SERVICE=qbittorrent
+QBT_COMPOSE_SERVICE=qbittorrent-${instance}
 QBT_PORT_APPLY_MODE=compose-recreate
 QBT_INTERNAL_PORT=6881
 QBT_PORT_ENV_FILE=${ETC_PROTON_DIR}/instances/${instance}/qbittorrent-port.env
