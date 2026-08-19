@@ -822,6 +822,7 @@ compose-recreate)
 			rollback_port="$CURRENT_DOCKER_PUBLISHED_PORT"
 		else
 			log "Forcing qBittorrent Compose recreation for a fleet-controlled configuration rollout"
+			rollback_port="$CURRENT_PUBLISHED_PORT"
 		fi
 
 		write_published_port

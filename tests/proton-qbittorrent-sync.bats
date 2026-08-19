@@ -335,6 +335,20 @@ EOF
   [ "$(awk '/^[A-Za-z_][A-Za-z0-9_]*=/ { count++ } END { print count + 0 }' "$PORT_ENV_FILE")" -eq 1 ]
 }
 
+@test "failed forced same-port recreation preserves the published-port artifact and cache" {
+  write_qbt_env compose-recreate
+  echo 'CURRENT_PORT=40001' > "$STATE_FILE"
+  echo 'QBT_PUBLISHED_PORT=40001' > "$PORT_ENV_FILE"
+  printf '40001' > "$CACHE_FILE"
+  printf '40001' > "$CURL_STATE"
+  printf '40001' > "$DOCKER_PORT_FILE"
+
+  run env QBITTORRENT_ENV_FILE="$ENV_FILE" STATE_FILE="$STATE_FILE" CACHE_FILE="$CACHE_FILE" DOCKER_CONFIG_DIR="$DOCKER_CONFIG_DIR" QBT_COMMON_SCRIPT="./proton-qbittorrent-common.sh" QBT_FORCE_RECREATE=1 QBT_TEST_COMPOSE_FAIL_PORT=40001 QBT_TEST_COMPOSE_FAIL_MODE=always QBT_COMPOSE_RECREATE_RETRIES=1 QBT_COMPOSE_RECREATE_RETRY_DELAY=0 bash ./proton-qbittorrent-sync-safe.sh sonarr
+  [ "$status" -eq 1 ]
+  grep -Fxq 'QBT_PUBLISHED_PORT=40001' "$PORT_ENV_FILE"
+  [[ "$(cat "$CACHE_FILE")" == "40001" ]]
+}
+
 @test "compose-recreate mode recreates when artifact matches but Docker still publishes the old port" {
   write_qbt_env compose-recreate
   echo 'CURRENT_PORT=40001' > "$STATE_FILE"
