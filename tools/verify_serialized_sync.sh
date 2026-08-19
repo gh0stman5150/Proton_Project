@@ -6,7 +6,7 @@ set -euo pipefail
 # and published-port env file.
 
 INSTANCES=(lidarr prowlarr radarr sonarr whisparr)
-ALLOC_SCRIPT="/usr/local/bin/proton_project/proton-qbt-allocate-and-sync.sh"
+ALLOC_SCRIPT="${ALLOC_SCRIPT:-/usr/local/bin/proton/proton-qbt-allocate-and-sync.sh}"
 STATE_DIR="/run/proton"
 VERIFY_TIMEOUT="600" # seconds per instance
 
@@ -23,8 +23,8 @@ if [[ ! -f "$ALLOC_SCRIPT" ]]; then
 fi
 
 if [[ ! -x "$ALLOC_SCRIPT" ]]; then
-	echo "Making allocator executable"
-	$ELEVATE chmod +x "$ALLOC_SCRIPT" || true
+	echo "ERROR: allocator script is not executable: $ALLOC_SCRIPT" >&2
+	exit 2
 fi
 
 FAIL_COUNT=0

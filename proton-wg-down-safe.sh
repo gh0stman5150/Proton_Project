@@ -267,6 +267,10 @@ fi
 # forwarded container traffic cannot fall back to stale routes. Shared
 # Docker<->Docker and Docker<->LAN main-table rules are intentionally left in
 # place because other Proton instances may still be active on the same bridge.
+if ! proton_route_lock_acquire; then
+	log "ERROR: Could not acquire the shared policy-route lock for $INSTANCE"
+	exit 1
+fi
 QBT_CONTAINER_IP="$(resolve_qbt_container_ip || true)"
 CACHED_QBT_CONTAINER_IP="$(read_cached_qbt_container_ip || true)"
 for source_ip in "$QBT_CONTAINER_IP" "$CACHED_QBT_CONTAINER_IP"; do
@@ -320,6 +324,11 @@ if command -v iptables >/dev/null 2>&1; then
 	iptables -t mangle -D FORWARD -i "$VPN_INTERFACE" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
 fi
 
+rm -f "$DOCKER_NETWORK_CIDR_STATE_FILE"
+rm -f "$QBT_CONTAINER_IP_STATE_FILE"
+rm -f "$QBT_CONTAINER_IP6_STATE_FILE"
+proton_route_lock_release
+
 teardown_resolved_dns "$VPN_INTERFACE"
 
 if [[ -f "$FILTERED_CONFIG_PATH" ]]; then
@@ -329,7 +338,3 @@ elif [[ -f "$WG_CONFIG" ]]; then
 else
 	run_wg_quick down "$WG_PROFILE" || true
 fi
-
-rm -f "$DOCKER_NETWORK_CIDR_STATE_FILE"
-rm -f "$QBT_CONTAINER_IP_STATE_FILE"
-rm -f "$QBT_CONTAINER_IP6_STATE_FILE"

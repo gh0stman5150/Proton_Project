@@ -1,0 +1,10 @@
+[Unit]
+Description=Wait for NAS SMB network readiness
+After=NetworkManager.service
+Before=mnt-data.mount mnt-plex.mount
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/default/nas-network-online
+ExecStart=/usr/local/bin/proton/nas-network-online.sh
+RemainAfterExit=yes

@@ -7,6 +7,8 @@ ETC_PROTON_DIR="/etc/proton"
 SYSTEMD_DIR="/etc/systemd/system"
 WG_POOL_DIR="/etc/wireguard/proton-pool"
 WG_RUNTIME_DIR="/etc/wireguard/proton-runtime"
+QBT_COMPOSE_COMMON_DIR="/opt/qbittorrent-common"
+INSTANCE_MANIFEST_SOURCE="${SCRIPT_DIR}/qbittorrent-instances.tsv"
 FORCE_ENV=0
 QBITTORRENT_URL_VALUE=""
 QBITTORRENT_USER_VALUE=""
@@ -26,22 +28,30 @@ OPTIONAL_SERVICES=(
 	proton-docker-watch@.service
 )
 
+TRIGGERED_SERVICES=(
+	proton-qbt-allocate@.service
+)
+
+AUXILIARY_SERVICES=(
+	nas-network-online.service
+)
+
+NAS_MOUNT_UNITS=(
+	mnt-data.mount
+	mnt-plex.mount
+)
+
 LEGACY_SINGLETON_SERVICES=(
 	proton-wg.service
 	proton-port-forward.service
 	proton-healthcheck.service
 )
 
-INSTANCES=(
-	lidarr
-	radarr
-	sonarr
-	whisparr
-	prowlarr
-)
+INSTANCES=()
 
 SCRIPTS=(
 	install-proton-systemd.sh
+	nas-network-online.sh
 	proton-instance-common.sh
 	proton-killswitch-dispatch.sh
 	proton-killswitch-safe.sh
@@ -51,6 +61,7 @@ SCRIPTS=(
 	proton-port-forward-safe.sh
 	proton-qbittorrent-common.sh
 	proton-qbittorrent-sync-safe.sh
+	proton-qbt-allocate-and-sync.sh
 	proton-qbt-dnat-cleanup.sh
 	proton-docker-network-watcher.sh
 	proton-server-manager.sh
@@ -64,6 +75,11 @@ ENV_FILES=(
 	proton-common.env
 	proton-port-forward.env
 	proton-healthcheck.env
+)
+
+QBT_FLEET_FILES=(
+	qbittorrent-compose.common.yml
+	qbittorrent-instances.tsv
 )
 
 PROTON_VPN_RELEASE_URL="https://repo.protonvpn.com/debian/dists/stable/main/binary-all/protonvpn-stable-release_1.0.8_all.deb"
@@ -216,9 +232,22 @@ validate_bundle() {
 		ensure_source_file "${SCRIPT_DIR}/${name}"
 	done
 
+	for name in "${TRIGGERED_SERVICES[@]}"; do
+		ensure_source_file "${SCRIPT_DIR}/${name}"
+	done
+
 	for name in "${ENV_FILES[@]}"; do
 		ensure_source_file "${SCRIPT_DIR}/${name}"
 	done
+
+	for name in "${QBT_FLEET_FILES[@]}"; do
+		ensure_source_file "${SCRIPT_DIR}/${name}"
+	done
+
+	ensure_source_file "${SCRIPT_DIR}/tools/verify-qbittorrent-fleet.sh"
+	validate_shell_syntax "${SCRIPT_DIR}/tools/verify-qbittorrent-fleet.sh"
+	ensure_source_file "${SCRIPT_DIR}/tools/reconcile-qbittorrent-fleet.sh"
+	validate_shell_syntax "${SCRIPT_DIR}/tools/reconcile-qbittorrent-fleet.sh"
 
 	ensure_source_file "${SCRIPT_DIR}/proton-qbittorrent.env"
 	ensure_source_file "${SCRIPT_DIR}/proton-qbittorrent-port.env"
@@ -483,80 +512,136 @@ install_qbittorrent_port_env() {
 	install -o root -g root -m 0600 "${source_file}" "${target_file}"
 }
 
+install_qbittorrent_compose_common() {
+	mkdir -p "$QBT_COMPOSE_COMMON_DIR"
+	chown root:root "$QBT_COMPOSE_COMMON_DIR"
+	chmod 0755 "$QBT_COMPOSE_COMMON_DIR"
+
+	install_normalized_file \
+		"${SCRIPT_DIR}/qbittorrent-compose.common.yml" \
+		"${QBT_COMPOSE_COMMON_DIR}/docker-compose.common.yml" 0644
+	install_normalized_file \
+		"${SCRIPT_DIR}/qbittorrent-instances.tsv" \
+		"${QBT_COMPOSE_COMMON_DIR}/qbittorrent-instances.tsv" 0644
+}
+
+install_qbittorrent_fleet_verifier() {
+	install_normalized_file \
+		"${SCRIPT_DIR}/tools/verify-qbittorrent-fleet.sh" \
+		"${BIN_DIR}/proton-qbt-fleet-verify.sh" 0755
+	install_normalized_file \
+		"${SCRIPT_DIR}/tools/reconcile-qbittorrent-fleet.sh" \
+		"${BIN_DIR}/proton-qbt-fleet-reconcile.sh" 0755
+}
+
+install_nas_mount_readiness() {
+	local mount_unit override_dir
+
+	for mount_unit in "${NAS_MOUNT_UNITS[@]}"; do
+		override_dir="${SYSTEMD_DIR}/${mount_unit}.d"
+		mkdir -p "$override_dir"
+		install_normalized_file \
+			"${SCRIPT_DIR}/nas-network-online.mount.conf" \
+			"${override_dir}/nas-network-online.conf" 0644
+	done
+}
+
+install_docker_tunnel_ordering() {
+	local override_dir="${SYSTEMD_DIR}/docker.service.d"
+
+	mkdir -p "$override_dir"
+	install_normalized_file \
+		"${SCRIPT_DIR}/docker-proton-tunnels.conf" \
+		"${override_dir}/proton-tunnels.conf" 0644
+}
+
+load_instance_manifest() {
+	mapfile -t INSTANCES < <(awk -F '\t' '$1 !~ /^#/ && $1 != "" { print $1 }' "$INSTANCE_MANIFEST_SOURCE")
+	if [[ "${#INSTANCES[@]}" -ne 5 ]]; then
+		echo "ERROR: $INSTANCE_MANIFEST_SOURCE must define exactly five qBittorrent instances." >&2
+		exit 1
+	fi
+}
+
+instance_manifest_value() {
+	local instance="$1"
+	local field="$2"
+	local value=""
+
+	value="$(awk -F '\t' -v instance="$instance" -v field="$field" '$1 == instance { print $field; exit }' "$INSTANCE_MANIFEST_SOURCE")"
+	if [[ -z "$value" ]]; then
+		echo "ERROR: Missing field $field for instance $instance in $INSTANCE_MANIFEST_SOURCE" >&2
+		exit 1
+	fi
+	printf '%s\n' "$value"
+}
+
 instance_webui_port() {
-	case "$1" in
-	lidarr)
-		printf '%s\n' 8081
-		;;
-	prowlarr)
-		printf '%s\n' 8082
-		;;
-	radarr)
-		printf '%s\n' 8083
-		;;
-	sonarr)
-		printf '%s\n' 8084
-		;;
-	whisparr)
-		printf '%s\n' 8085
-		;;
-	*)
-		printf '%s\n' 8080
-		;;
-	esac
+	instance_manifest_value "$1" 2
 }
 
 instance_vpn_interface() {
-	case "$1" in
-	lidarr)
-		printf '%s\n' pvlidarr
-		;;
-	radarr)
-		printf '%s\n' pvradarr
-		;;
-	sonarr)
-		printf '%s\n' pvsonarr
-		;;
-	whisparr)
-		printf '%s\n' pvwhisp
-		;;
-	prowlarr)
-		printf '%s\n' pvprowl
-		;;
-	*)
-		printf '%s\n' "pv$1"
-		;;
-	esac
+	instance_manifest_value "$1" 5
 }
 
-# Each instance gets a distinct WireGuard client address subnet so Proton's
-# NAT-PMP hands out an independent forwarded port per instance. Address =
-# 10.<n>.0.2/32, gateway/DNS = 10.<n>.0.1.
 instance_address_subnet() {
-	case "$1" in
-	lidarr)
-		printf '%s\n' 2
-		;;
-	radarr)
-		printf '%s\n' 3
-		;;
-	sonarr)
-		printf '%s\n' 4
-		;;
-	whisparr)
-		printf '%s\n' 5
-		;;
-	prowlarr)
-		printf '%s\n' 6
-		;;
-	*)
-		printf '%s\n' 2
-		;;
-	esac
+	instance_manifest_value "$1" 6
+}
+
+instance_vpn_table() {
+	instance_manifest_value "$1" 7
+}
+
+instance_qbt_rule_priority() {
+	instance_manifest_value "$1" 8
+}
+
+upsert_instance_env_value() {
+	local env_file="$1"
+	local key="$2"
+	local value="$3"
+	local temp_file=""
+
+	temp_file="$(mktemp "${env_file}.XXXXXX")"
+	awk -v key="$key" -v value="$value" '
+		BEGIN { found = 0 }
+		$0 ~ "^" key "=" {
+			if (!found) print key "=" value
+			found = 1
+			next
+		}
+		{ print }
+		END { if (!found) print key "=" value }
+	' "$env_file" >"$temp_file"
+	chown root:root "$temp_file"
+	chmod 0600 "$temp_file"
+	mv -f "$temp_file" "$env_file"
+}
+
+normalize_instance_qbittorrent_port_env() {
+	local port_env="$1"
+	local published_port=""
+	local temp_file=""
+
+	published_port="$(awk -F= '$1 == "QBT_PUBLISHED_PORT" { print $2; exit }' "$port_env")"
+	if [[ ! "$published_port" =~ ^[0-9]+$ ]] || ((published_port < 1 || published_port > 65535)); then
+		echo "ERROR: Cannot normalize $port_env: invalid or missing QBT_PUBLISHED_PORT." >&2
+		exit 1
+	fi
+
+	temp_file="$(mktemp "${port_env}.XXXXXX")"
+	{
+		printf '# Managed by proton-qbittorrent-sync-safe.sh\n'
+		printf 'QBT_PUBLISHED_PORT=%s\n' "$published_port"
+	} >"$temp_file"
+	chown root:root "$temp_file"
+	chmod 0600 "$temp_file"
+	mv -f "$temp_file" "$port_env"
 }
 
 install_instance_examples() {
 	local instance instance_dir proton_example qb_example port_env webui_port vpn_if
+	local address_subnet vpn_table qbt_rule_priority proton_env qb_env
 
 	mkdir -p "${ETC_PROTON_DIR}/instances"
 	chown root:root "${ETC_PROTON_DIR}/instances"
@@ -570,8 +655,10 @@ install_instance_examples() {
 		webui_port="$(instance_webui_port "$instance")"
 		vpn_if="$(instance_vpn_interface "$instance")"
 		address_subnet="$(instance_address_subnet "$instance")"
-		vpn_table="$((51800 + address_subnet))"
-		qbt_rule_priority="$((110 + address_subnet))"
+		vpn_table="$(instance_vpn_table "$instance")"
+		qbt_rule_priority="$(instance_qbt_rule_priority "$instance")"
+		proton_env="${instance_dir}/proton.env"
+		qb_env="${instance_dir}/qbittorrent.env"
 
 		mkdir -p "$instance_dir"
 		chown root:root "$instance_dir"
@@ -615,18 +702,25 @@ QBT_COMPOSE_SERVICE=qbittorrent-${instance}
 QBT_PORT_APPLY_MODE=compose-recreate
 QBT_INTERNAL_PORT=6881
 QBT_PORT_ENV_FILE=${ETC_PROTON_DIR}/instances/${instance}/qbittorrent-port.env
-QBT_NETWORK_NAME=starr-${instance}
+QBT_NETWORK_NAME=starr_network
 EOF
 
 		chown root:root "$proton_example" "$qb_example"
 		chmod 0600 "$proton_example" "$qb_example"
 
 		if [[ -f "$port_env" ]]; then
-			chown root:root "$port_env"
-			chmod 0600 "$port_env"
-			log "Preserved ${port_env}"
+			normalize_instance_qbittorrent_port_env "$port_env"
+			log "Preserved and normalized ${port_env} to one QBT_PUBLISHED_PORT assignment"
 		else
 			install_normalized_file "${SCRIPT_DIR}/proton-qbittorrent-port.env" "$port_env" 0600
+		fi
+
+		if [[ -f "$proton_env" ]]; then
+			upsert_instance_env_value "$proton_env" VPN_TABLE "$vpn_table"
+			upsert_instance_env_value "$proton_env" QBT_VPN_RULE_PRIORITY "$qbt_rule_priority"
+		fi
+		if [[ -f "$qb_env" ]]; then
+			upsert_instance_env_value "$qb_env" QBT_INSTANCE_NAME "$instance"
 		fi
 
 		for real_config in proton.env qbittorrent.env wireguard.conf; do
@@ -741,15 +835,16 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
-for cmd in awk cat chmod chown dpkg-query find install mkdir mktemp mv readlink rm systemctl; do
+for cmd in awk cat chmod chown dpkg-query find install ip mkdir mktemp mv nc readlink rm sleep systemctl; do
 	require_command "$cmd"
 done
 
 ensure_proton_vpn_packages
 validate_bundle
+load_instance_manifest
 stop_proton_services_for_redeploy
 
-mkdir -p "$BIN_DIR" "$ETC_PROTON_DIR" "$SYSTEMD_DIR" "$WG_POOL_DIR"
+mkdir -p "$BIN_DIR" "$ETC_PROTON_DIR" "$SYSTEMD_DIR" "$WG_POOL_DIR" "$QBT_COMPOSE_COMMON_DIR"
 mkdir -p "$WG_RUNTIME_DIR"
 chmod 0755 "$BIN_DIR"
 chmod 0755 "$ETC_PROTON_DIR"
@@ -769,12 +864,24 @@ for service in "${OPTIONAL_SERVICES[@]}"; do
 	install_service_file "$service"
 done
 
+for service in "${TRIGGERED_SERVICES[@]}"; do
+	install_service_file "$service"
+done
+
+for service in "${AUXILIARY_SERVICES[@]}"; do
+	install_service_file "$service"
+done
+
 for env_file in "${ENV_FILES[@]}"; do
 	install_env_template "$env_file" 0644
 done
 
 install_qbittorrent_env
 install_qbittorrent_port_env
+install_qbittorrent_compose_common
+install_qbittorrent_fleet_verifier
+install_nas_mount_readiness
+install_docker_tunnel_ordering
 install_instance_examples
 load_common_env
 load_port_forward_env
@@ -783,6 +890,7 @@ enable_and_start_services
 
 log "Installed Proton scripts to ${BIN_DIR}"
 log "Installed Proton env files to ${ETC_PROTON_DIR}"
+log "Installed shared qBittorrent Compose policy to ${QBT_COMPOSE_COMMON_DIR}"
 log "Installed systemd units to ${SYSTEMD_DIR}"
 log "Installed instance examples under ${ETC_PROTON_DIR}/instances"
 log "Templated instance units installed; start one instance first, for example: systemctl start proton-wg@sonarr proton-port-forward@sonarr proton-healthcheck@sonarr"

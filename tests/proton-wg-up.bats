@@ -18,6 +18,7 @@ setup() {
   export SERVER_POOL_ENABLED="off"
   export MANAGE_RESOLVED_DNS="off"
   export KILLSWITCH_SCRIPT="$TEST_TMPDIR/missing-killswitch.sh"
+  export PROTON_ROUTE_LOCK_FILE="$TEST_TMPDIR/policy-routing.lock"
 
   mkdir -p "$TMPBIN" "$STATE_DIR" "$WG_RUNTIME_DIR" "$PROTON_INSTANCE_ROOT/sonarr"
   : > "$PROTON_COMMON_ENV"
@@ -69,6 +70,9 @@ if [[ "$1" == "-4" && "$2" == "addr" && "$3" == "show" ]]; then
   exit 0
 fi
 printf '%s\n' "$*" >> "$IP_LOG"
+if [[ "$*" == *"rule del"* || "$*" == *"rule del "* ]]; then
+  exit 2
+fi
 exit 0
 EOF
   chmod +x "$TMPBIN/ip"

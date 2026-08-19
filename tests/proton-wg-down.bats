@@ -9,6 +9,7 @@ setup() {
   export STATE_DIR="$TEST_TMPDIR/state"
   export WG_RUNTIME_DIR="$TEST_TMPDIR/runtime"
   export IP_LOG="$TEST_TMPDIR/ip.log"
+  export PROTON_ROUTE_LOCK_FILE="$TEST_TMPDIR/policy-routing.lock"
   mkdir -p "$TMPBIN" "$STATE_DIR" "$WG_RUNTIME_DIR" "$PROTON_INSTANCE_ROOT/sonarr"
   : > "$IP_LOG"
 

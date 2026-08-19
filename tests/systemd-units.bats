@@ -47,4 +47,28 @@
 
   grep -Fq 'Requires=proton-wg@%i.service proton-port-forward@%i.service' proton-healthcheck@.service
   grep -Fq 'ExecStart=/usr/local/bin/proton/proton-healthcheck.sh %i' proton-healthcheck@.service
+
+  grep -Fq 'ExecStart=/usr/local/bin/proton/proton-qbt-allocate-and-sync.sh %i' proton-qbt-allocate@.service
+  grep -Fq 'Requires=proton-wg@%i.service' proton-qbt-allocate@.service
+  ! grep -Fq '/usr/local/bin/proton_project/' proton-qbt-allocate@.service
+}
+
+@test "NAS mounts wait for route and SMB readiness" {
+  grep -Fxq 'Before=mnt-data.mount mnt-plex.mount' nas-network-online.service
+  grep -Fxq 'ExecStart=/usr/local/bin/proton/nas-network-online.sh' nas-network-online.service
+  grep -Fxq 'Requires=nas-network-online.service' nas-network-online.mount.conf
+  grep -Fxq 'After=nas-network-online.service' nas-network-online.mount.conf
+  grep -Fq 'ip route get "$NAS_HOST"' nas-network-online.sh
+  grep -Fq 'nc -z -w 2 "$NAS_HOST" "$NAS_PORT"' nas-network-online.sh
+}
+
+@test "Docker waits for every managed Proton tunnel before restoring containers" {
+  local instance
+
+  for instance in lidarr prowlarr radarr sonarr whisparr; do
+    grep -Fq "proton-wg@${instance}.service" docker-proton-tunnels.conf
+  done
+
+  grep -Fxq 'Wants=proton-wg@lidarr.service proton-wg@prowlarr.service proton-wg@radarr.service proton-wg@sonarr.service proton-wg@whisparr.service' docker-proton-tunnels.conf
+  grep -Fxq 'After=proton-wg@lidarr.service proton-wg@prowlarr.service proton-wg@radarr.service proton-wg@sonarr.service proton-wg@whisparr.service' docker-proton-tunnels.conf
 }

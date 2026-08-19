@@ -13,6 +13,107 @@ proton_instance_error() {
 	exit 1
 }
 
+# Policy rules at priorities 108/109 are shared by every Proton instance.
+# WireGuard starts, stops, and Docker-event reconciliation must never perform
+# their delete/add sequences concurrently or one instance can fail with
+# RTNETLINK/EEXIST and leave a partially configured routing table.
+proton_route_lock_acquire() {
+	local lock_dir=""
+	local wait_seconds="${PROTON_ROUTE_LOCK_WAIT_SECONDS:-60}"
+
+	PROTON_ROUTE_LOCK_FILE="${PROTON_ROUTE_LOCK_FILE:-/run/proton/policy-routing.lock}"
+
+	if [[ -n "${PROTON_ROUTE_LOCK_FD:-}" ]]; then
+		printf 'ERROR: Proton policy-route lock is already held by this process.\n' >&2
+		return 1
+	fi
+	if [[ ! "$wait_seconds" =~ ^[0-9]+$ ]]; then
+		printf 'ERROR: Invalid PROTON_ROUTE_LOCK_WAIT_SECONDS value: %s\n' "$wait_seconds" >&2
+		return 1
+	fi
+	if ! command -v flock >/dev/null 2>&1; then
+		printf 'ERROR: Required command '\''flock'\'' is not installed.\n' >&2
+		return 1
+	fi
+
+	lock_dir="${PROTON_ROUTE_LOCK_FILE%/*}"
+	if [[ "$lock_dir" == "$PROTON_ROUTE_LOCK_FILE" ]]; then
+		lock_dir="."
+	fi
+	mkdir -p "$lock_dir"
+	exec {PROTON_ROUTE_LOCK_FD}>"$PROTON_ROUTE_LOCK_FILE"
+	if ! flock -w "$wait_seconds" "$PROTON_ROUTE_LOCK_FD"; then
+		printf 'ERROR: Timed out after %s seconds waiting for Proton policy-route lock %s.\n' \
+			"$wait_seconds" "$PROTON_ROUTE_LOCK_FILE" >&2
+		exec {PROTON_ROUTE_LOCK_FD}>&-
+		unset PROTON_ROUTE_LOCK_FD
+		return 1
+	fi
+}
+
+proton_route_lock_release() {
+	if [[ -z "${PROTON_ROUTE_LOCK_FD:-}" ]]; then
+		return 0
+	fi
+
+	flock -u "$PROTON_ROUTE_LOCK_FD" 2>/dev/null || true
+	exec {PROTON_ROUTE_LOCK_FD}>&-
+	unset PROTON_ROUTE_LOCK_FD
+}
+
+# Remove every exact copy of one policy rule. A prior interrupted lifecycle or
+# older add-without-delete implementation may have left duplicates behind. The
+# caller must hold the host-global policy-route lock while using this helper.
+proton_delete_ip_rule_all() {
+	local family="${1:-}"
+	local attempt=0
+	local -a ip_command=(ip)
+	shift || true
+
+	case "$family" in
+	4) ;;
+	6) ip_command+=(-6) ;;
+	*)
+		printf 'ERROR: Invalid IP family for policy rule deletion: %s\n' "$family" >&2
+		return 1
+		;;
+	esac
+	if (($# == 0)); then
+		printf 'ERROR: Missing policy rule selector for deletion.\n' >&2
+		return 1
+	fi
+
+	for ((attempt = 0; attempt < 64; attempt++)); do
+		if ! "${ip_command[@]}" rule del "$@" >/dev/null 2>&1; then
+			return 0
+		fi
+	done
+
+	printf 'ERROR: Refusing to delete more than 64 copies of one policy rule: %s\n' "$*" >&2
+	return 1
+}
+
+# Canonicalize an exact rule to one copy. The final add is intentionally not
+# suppressed: EEXIST or another kernel error must fail the lifecycle operation
+# instead of leaving partially reconciled routing state.
+proton_replace_ip_rule() {
+	local family="${1:-}"
+	local -a ip_command=(ip)
+	shift || true
+
+	case "$family" in
+	4) ;;
+	6) ip_command+=(-6) ;;
+	*)
+		printf 'ERROR: Invalid IP family for policy rule replacement: %s\n' "$family" >&2
+		return 1
+		;;
+	esac
+
+	proton_delete_ip_rule_all "$family" "$@" || return 1
+	"${ip_command[@]}" rule add "$@"
+}
+
 proton_validate_instance_name() {
 	local instance="${1:-}"
 

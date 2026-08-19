@@ -1,0 +1,29 @@
+# Shared qBittorrent service policy for every managed instance.
+#
+# Instance compose files extend this service and may override only identity,
+# Web UI, tunnel bind address, explicitly injected live port, and local paths.
+# Change fleet-wide behavior here, then run the parity verifier and reconcile
+# all five services as documented in docs/runbooks/qbittorrent-fleet-changes.md.
+services:
+  qbittorrent-common:
+    image: lscr.io/linuxserver/qbittorrent:libtorrentv1
+    stop_grace_period: 90s
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      UMASK: "002"
+      TZ: America/Chicago
+      S6_SERVICES_GRACETIME: "60000"
+      S6_KILL_FINISH_MAXTIME: "60000"
+      S6_KILL_GRACETIME: "60000"
+    volumes:
+      - /mnt/data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS --max-time 8 http://127.0.0.1:$${WEBUI_PORT}/api/v2/app/version || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - starr_network

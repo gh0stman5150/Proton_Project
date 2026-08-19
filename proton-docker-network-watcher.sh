@@ -303,9 +303,9 @@ reapply_routes() {
 
 	if [[ -n "$old_cidr" && "$old_cidr" != "$new_cidr" ]]; then
 		log "Removing old Docker policy rules for $old_cidr"
-		ip rule del from "$old_cidr" to "$old_cidr" lookup main priority "$DOCKER_LOCAL_RULE_PRIORITY" 2>/dev/null || true
+		proton_delete_ip_rule_all 4 from "$old_cidr" to "$old_cidr" lookup main priority "$DOCKER_LOCAL_RULE_PRIORITY"
 		if [[ -n "$LAN_CIDR" ]]; then
-			ip rule del from "$old_cidr" to "$LAN_CIDR" lookup main priority "$DOCKER_LAN_RULE_PRIORITY" 2>/dev/null || true
+			proton_delete_ip_rule_all 4 from "$old_cidr" to "$LAN_CIDR" lookup main priority "$DOCKER_LAN_RULE_PRIORITY"
 		fi
 		ip rule del from "$old_cidr" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY" 2>/dev/null || true
 		ip rule del from "$old_cidr" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY" 2>/dev/null || true
@@ -316,9 +316,9 @@ reapply_routes() {
 
 	if [[ -n "$new_cidr" ]]; then
 		log "Applying Docker policy routing for $INSTANCE on $new_cidr via table $VPN_TABLE and $VPN_INTERFACE"
-		ip rule add from "$new_cidr" to "$new_cidr" lookup main priority "$DOCKER_LOCAL_RULE_PRIORITY" 2>/dev/null || true
+		proton_replace_ip_rule 4 from "$new_cidr" to "$new_cidr" lookup main priority "$DOCKER_LOCAL_RULE_PRIORITY"
 		if [[ -n "$LAN_CIDR" ]]; then
-			ip rule add from "$new_cidr" to "$LAN_CIDR" lookup main priority "$DOCKER_LAN_RULE_PRIORITY" 2>/dev/null || true
+			proton_replace_ip_rule 4 from "$new_cidr" to "$LAN_CIDR" lookup main priority "$DOCKER_LAN_RULE_PRIORITY"
 		fi
 		ip rule del from "$new_cidr" lookup 51820 priority "$DOCKER_VPN_RULE_PRIORITY" 2>/dev/null || true
 		ip rule del from "$new_cidr" lookup "$VPN_TABLE" priority "$DOCKER_VPN_RULE_PRIORITY" 2>/dev/null || true
@@ -354,12 +354,11 @@ reapply_routes() {
 		ip -6 rule del from "$old_qbt_ipv6_rule_source" lookup "$VPN_TABLE" priority "$QBT_VPN_RULE_PRIORITY" 2>/dev/null || true
 	fi
 	if [[ -n "$old_cidr6" && "$old_cidr6" != "$new_cidr6" ]]; then
-		ip -6 rule del from "$old_cidr6" to "$old_cidr6" lookup main priority "$DOCKER_LOCAL_RULE_PRIORITY" 2>/dev/null || true
+		proton_delete_ip_rule_all 6 from "$old_cidr6" to "$old_cidr6" lookup main priority "$DOCKER_LOCAL_RULE_PRIORITY"
 		ip -6 rule del from "$old_cidr6" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY" 2>/dev/null || true
 	fi
 	if [[ -n "$new_cidr6" ]]; then
-		ip -6 rule del from "$new_cidr6" to "$new_cidr6" lookup main priority "$DOCKER_LOCAL_RULE_PRIORITY" 2>/dev/null || true
-		ip -6 rule add from "$new_cidr6" to "$new_cidr6" lookup main priority "$DOCKER_LOCAL_RULE_PRIORITY" 2>/dev/null || true
+		proton_replace_ip_rule 6 from "$new_cidr6" to "$new_cidr6" lookup main priority "$DOCKER_LOCAL_RULE_PRIORITY"
 		ip -6 rule del from "$new_cidr6" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY" 2>/dev/null || true
 		if docker_ipv6_fallback_enabled; then
 			ip -6 rule add from "$new_cidr6" lookup "$VPN_TABLE" priority "$DOCKER_FALLBACK_VPN_RULE_PRIORITY" 2>/dev/null || true
@@ -382,6 +381,19 @@ reapply_routes() {
 		rm -f "$DOCKER_NETWORK_CIDR_STATE_FILE" 2>/dev/null || true
 	fi
 	printf "%s" "$new_cidr6" >"$LAST6_FILE" || true
+}
+
+reapply_routes_serialized() {
+	local rc=0
+
+	if ! proton_route_lock_acquire; then
+		log "ERROR: Could not acquire the shared policy-route lock for $INSTANCE"
+		return 1
+	fi
+
+	reapply_routes "$@" || rc=$?
+	proton_route_lock_release
+	return "$rc"
 }
 
 reapply_killswitch() {
@@ -426,7 +438,9 @@ main() {
 	local cidr cidr6
 	cidr=$(find_network_cidr)
 	cidr6=$(find_network_cidr6)
-	reapply_routes "$cidr" "$cidr6"
+	if ! reapply_routes_serialized "$cidr" "$cidr6"; then
+		log "Warning: policy-route reconciliation skipped; another lifecycle operation still owns the shared lock"
+	fi
 	reapply_killswitch
 	refresh_qb_state
 
@@ -444,7 +458,9 @@ main() {
 						sleep "$DEBOUNCE_SECONDS"
 						cidr=$(find_network_cidr)
 						cidr6=$(find_network_cidr6)
-						reapply_routes "$cidr" "$cidr6"
+						if ! reapply_routes_serialized "$cidr" "$cidr6"; then
+							log "Warning: policy-route reconciliation skipped; another lifecycle operation still owns the shared lock"
+						fi
 						reapply_killswitch
 						refresh_qb_state
 						;;
@@ -461,7 +477,9 @@ main() {
 			sleep "$POLL_INTERVAL"
 			cidr=$(find_network_cidr)
 			cidr6=$(find_network_cidr6)
-			reapply_routes "$cidr" "$cidr6"
+			if ! reapply_routes_serialized "$cidr" "$cidr6"; then
+				log "Warning: policy-route reconciliation skipped; another lifecycle operation still owns the shared lock"
+			fi
 			reapply_killswitch
 			refresh_qb_state
 		done

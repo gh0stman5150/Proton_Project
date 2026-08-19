@@ -1,5 +1,12 @@
 #!/usr/bin/env bats
 
+@test "both firewall backends serialize their shared host-wide ruleset" {
+  grep -Fq 'KILLSWITCH_LOCK_FILE="${KILLSWITCH_LOCK_FILE:-/run/proton/killswitch.lock}"' proton-killswitch-nft.sh
+  grep -Fq 'KILLSWITCH_LOCK_FILE="${KILLSWITCH_LOCK_FILE:-/run/proton/killswitch.lock}"' proton-killswitch-safe.sh
+  grep -Fq 'flock -w 30 9' proton-killswitch-nft.sh
+  grep -Fq 'flock -w 30 9' proton-killswitch-safe.sh
+}
+
 setup() {
   TEST_TMPDIR="${BATS_TEST_TMPDIR:-$BATS_TMPDIR}"
   TMPBIN="$TEST_TMPDIR/bin"
@@ -12,6 +19,7 @@ setup() {
   export NFT_CONCURRENCY_LOG="$TEST_TMPDIR/nft-concurrency.log"
   export NFT_ACTIVE_DIR="$TEST_TMPDIR/nft-active"
   export STATE_DIR="$TEST_TMPDIR/state"
+  export KILLSWITCH_LOCK_FILE="$TEST_TMPDIR/killswitch.lock"
   mkdir -p "$STATE_DIR"
 
   cat > "$TMPBIN/systemd-cat" <<'EOF'
@@ -114,7 +122,7 @@ EOF
   grep -Fx 'delete table inet proton' "$NFT_STDIN"
   grep -F 'table inet proton {' "$NFT_STDIN"
   ! grep -Fx 'delete table inet proton' "$NFT_LOG"
-  [ -f "$STATE_DIR/killswitch.lock" ]
+  [ -f "$KILLSWITCH_LOCK_FILE" ]
 }
 
 @test "nft backend serializes concurrent watcher applies" {
